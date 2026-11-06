@@ -1,0 +1,10 @@
+.idea/
+cmake-build-debug/
+
+*.exe
+*.obj
+*.o
+*.dll
+
+dbfile/
+walfile/
