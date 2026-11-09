@@ -5,29 +5,42 @@
 #ifndef KWDB_WAL_H
 #define KWDB_WAL_H
 #include <filesystem>
+#include <functional>
 
+class Database;
 
 class WAL {
+private:
     std::filesystem::path walPath;
-    //immutable opcode (compile-time)
-    static constexpr const char* PUT_OP = "PUT";
-    static constexpr const char* REMOVE_OP = "RM";
-    static constexpr const char* BEGIN = "BEGIN";
-    static constexpr const char* COMMIT = "COMMIT";
-    static constexpr const char* ROLLBACK = "ROLLBACK";
+    uint64_t lastLsn_ = 0;
 
-    static constexpr const char SEPARATOR = ':';
+    void writeRecord(const std::string &payload);
 
-    public:
-    WAL();
+public:
+    struct Record {
+        uint64_t lsn;
+        uint8_t type;
+        std::string key;
+        std::string value;
+    };
+
+    static constexpr uint8_t PUT_OP = 0x01;
+    static constexpr uint8_t REMOVE_OP = 0x02;
+
+    explicit WAL(std::filesystem::path path);
+
+    uint64_t getLastLsn() const;
 
     void appendPut(
-        const std::string& key,
-        const std::string& value);
+        const std::string &key,
+        const std::string &value);
 
     void appendRemove(
-        const std::string& key);
-};
+        const std::string &key);
 
+    void replay(
+        uint64_t lastLsn,
+        const std::function<void(const Record&)>& apply);
+};
 
 #endif //KWDB_WAL_H

@@ -15,6 +15,8 @@ class Database {
     std::filesystem::path dbPath;
     std::unordered_map<std::string, std::string> data;
     WAL wal;
+    uint64_t checkpointLsn = 0;
+    uint64_t lastLsn = 0;
 
 public:
     Database();
