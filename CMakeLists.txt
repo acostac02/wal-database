@@ -8,4 +8,6 @@ add_executable(kwdb main.cpp
         database/database.h
         wal/wal.cpp
         wal/wal.h
-        format.h)
+        format.h
+        test/test.cpp
+        test/test.h)

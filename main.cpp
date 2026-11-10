@@ -1,6 +1,6 @@
-#include <iostream>
-#include "database/database.h"
+#include "test/test.h"
 
 int main() {
-    Database db = Database();
+    testA();
+    testB();
 }

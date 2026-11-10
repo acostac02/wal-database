@@ -14,24 +14,30 @@ using namespace format;
 
 namespace {
     constexpr char MAGIC[4] = {'K', 'V', 'D', 'B'};
+
     struct Header {
         uint32_t version = 1;
         uint64_t checkpoint_lsn = 0;
         uint64_t count = 0;
     };
 
-    //write the database file header into the specified ofstream
-    void writeHeader(std::ofstream& out, const Header& header) {
+
+    /// Write the database file header into the specified ofstream.
+    /// @param out reference of the file stream where to write the header.
+    /// @param header reference if the header struct.
+    void writeHeader(std::ofstream &out, const Header &header) {
         out.write(MAGIC, sizeof(MAGIC));
         writeValue(out, header.version);
         writeValue(out, header.checkpoint_lsn);
         writeValue(out, header.count);
     }
 
-    //read the database file header, first checl
-    Header readHeader(std::ifstream& in) {
+    /// Read the database file header, check magic and version and set the struct filed.
+    /// @param in input file stream.
+    /// @throws std::runtime_error if the magic / version is not correct.
+    Header readHeader(std::ifstream &in) {
         char magic[4];
-        in.read(reinterpret_cast<char*>(magic), sizeof(magic));
+        in.read(reinterpret_cast<char *>(magic), sizeof(magic));
         if (memcmp(magic, MAGIC, 4) != 0) {
             throw std::runtime_error("Incorrect magic in database.");
         }
@@ -43,13 +49,16 @@ namespace {
         }
         h.checkpoint_lsn = readValue<uint64_t>(in);
         h.count = readValue<uint64_t>(in);
+        return h;
     }
 }
 
 
-//Initialize database, create database file if not exist and insert the first header with version 1, wal checkpoint 0 and couples count 0.
+/// Database constructor, writes the header into the db file, load last snapshot from disk and replay the wal file.
+/// @throws std::runtime_error if the db file cannot be opened for the initialization or if the header cannot be written.
 Database::Database()
-    : dbPath("../dbfile/dbfile.db") {
+    : dbPath("../dbfile/dbfile.db"),
+      wal(dbPath.parent_path() / "wal.log") {
     std::filesystem::create_directories(dbPath.parent_path());
     if (!std::filesystem::exists(dbPath)) {
         std::ofstream file(dbPath, std::ios::binary | std::ios::trunc);
@@ -65,10 +74,13 @@ Database::Database()
     }
 
     loadFromDisk();
-    //wal.replay(checkpointLsn, /* apply */);
+    wal.replay(checkpointLsn, [this](const WAL::Record &r) {
+        if (r.type == WAL::PUT_OP) data[r.key] = r.value;
+        else if (r.type == WAL::REMOVE_OP) data.erase(r.key);
+    });
 }
 
-//Insert a pair key-value in the unsorted_map
+///Insert a pair key-value in the unsorted_map. Before the insertion save the log in the wal file.
 void Database::put(
     const std::string &key,
     const std::string &value) {
@@ -76,14 +88,14 @@ void Database::put(
     data[key] = value;
 }
 
-//Get the value from the key
+///Get the value from the key from the unsorted map. The operation is not logged into the wal (simple read).
 std::string Database::get(
     const std::string &key)
 const {
     return data.at(key);
 }
 
-//Remove a key-value pair from the unsorted_map
+///Remove a key-value pair from the unsorted_map. The operation is logged into the wal-file before the actual delete.
 void Database::remove(
     const std::string &key) {
     if (data.contains(key)) {
@@ -92,7 +104,7 @@ void Database::remove(
     }
 }
 
-//Persist header and pairs (present in the data map) in the database file.
+///Persist header and pairs (present in the data map) in the database file.
 void Database::saveToDisk() {
     std::ofstream file(dbPath, std::ios::binary | std::ios::trunc);
     if (!file.is_open()) {
@@ -100,11 +112,11 @@ void Database::saveToDisk() {
     }
 
     Header header;
-    header.checkpoint_lsn = checkpointLsn;
+    header.checkpoint_lsn = wal.getLastLsn();
     header.count = data.size();
     writeHeader(file, header);
 
-    for (const auto& [key, value] : data) {
+    for (const auto &[key, value]: data) {
         writeString(file, key);
         writeString(file, value);
     }
@@ -113,17 +125,18 @@ void Database::saveToDisk() {
         throw std::runtime_error("Cannot write database file.");
     }
     file.close();
+
+    checkpointLsn = header.checkpoint_lsn;
 }
 
-// Loads data from the database file into the unordered_map.
+///Loads data from the database file into the unordered_map.
 void Database::loadFromDisk() {
-
     std::ifstream file(dbPath, std::ios::binary);
     if (!file.is_open()) {
         throw std::runtime_error("Cannot open database file for load.");
     }
 
-    Header header = readHeader(file);
+    const Header header = readHeader(file);
     checkpointLsn = header.checkpoint_lsn;
     data.clear();
 
@@ -133,3 +146,5 @@ void Database::loadFromDisk() {
         data[std::move(key)] = std::move(value);
     }
 }
+
+bool Database::has(const std::string& key) const { return data.contains(key); }

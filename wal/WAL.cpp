@@ -8,23 +8,43 @@
 
 #include <filesystem>
 #include "fstream"
+#include <cstring>
 
 using namespace format;
 
 namespace {
+    constexpr uint32_t MAX_RECORD = 64 * 1024 * 1024; //64MB
     const char MAGIC[4] = {'K', 'V', 'W', 'L'};
-    constexpr uint64_t WAL_VERSION = 1;
+    constexpr uint32_t WAL_VERSION = 1;
 
     void writeHeader(std::ofstream &out) {
         out.write(MAGIC, sizeof(MAGIC));
         writeValue(out, WAL_VERSION);
     }
+
+    void readWalHeader(std::istream &walFile) {
+        char magic[4];
+        walFile.read(magic, sizeof(magic));
+        if (!walFile || memcmp(magic, MAGIC, 4) != 0) {
+            throw std::runtime_error("Incorrect magic in wal.");
+        }
+
+        const auto version = readValue<uint32_t>(walFile);
+        if (version != WAL_VERSION) {
+            throw std::runtime_error("wal file version not supported: " + std::to_string(version));
+        }
+    }
 }
 
-//constructor, generate the wal file if not exist.
+/// Wal class constructor, generate the wal file if not exist (zero-sized file is also considered as invalid) and insert
+/// the header (MAGIC + WAL_VERSION).
+/// @param path the path where the file is created.
+/// @throws std::runtime_error if the created file cannot be opened.
+/// @throws std::runtime_error if the header cannot be written in the created file.
 WAL::WAL(std::filesystem::path path)
     : walPath(std::move(path)) {
-    std::filesystem::create_directory(path.parent_path());
+    if (!walPath.parent_path().empty())
+        std::filesystem::create_directories(walPath.parent_path());
 
     if (!std::filesystem::exists(walPath) || std::filesystem::file_size(walPath) == 0) {
         std::ofstream out(walPath, std::ios::binary | std::ios::trunc);
@@ -40,6 +60,11 @@ WAL::WAL(std::filesystem::path path)
     }
 }
 
+/// Appends one record to the WAL file, in append mode.
+/// Record layout: [payload size: uint32][CRC-32 of payload: uint32][payload].
+/// The record is assembled in memory and written with a single write call.
+/// @param payload Serialized operation (lsn, op code, key, value).
+/// @throws std::runtime_error if the file cannot be opened or written.
 void WAL::writeRecord(const std::string &payload) {
     std::ofstream out(walPath, std::ios::binary | std::ios::app);
     if (!out.is_open()) {
@@ -58,32 +83,91 @@ void WAL::writeRecord(const std::string &payload) {
     }
 }
 
+/// Returns the LSN of the last record written to the WAL (or restored by
+/// replay()). The next record will use lastLsn() + 1.
 uint64_t WAL::getLastLsn() const {
     return lastLsn_;
 }
 
-//First implementation of WAL recovery (for example after a crash).
-//Load wal file and insert in memory the lines content.
-//This first version does not use checkpoint, only for testing.
-void WAL::replay(Database &db) {
+/// Opens the wal file for the replay.
+/// After checking the header (magic and version), read the file records and if the lsn is greater than the checkpoint
+/// lsn the record is inserted into the unsorted map by using the apply function passed as argument (older record are
+/// discarded).
+/// The cycle is interrupted if the recalculated checksum does not match the extracted one, or if the size (len) exceeds
+/// the maximum value MAX_RECORD.
+/// @param checkpointLsn: the last checkpoint for confront.
+/// @param apply: function to the unsorted map insertion, passed by the caller.
+/// @throws std::runtime_error if the wal file cannot be opened or if an unknown op code is read.
+void WAL::replay(
+    uint64_t checkpointLsn,
+    const std::function<void(const Record &)> &apply) {
+    std::ifstream walFile(walPath, std::ios::binary);
+    if (!walFile.is_open()) {
+        throw std::runtime_error("Cannot open WAL file for replay.");
+    }
 
+    readWalHeader(walFile);
+    lastLsn_ = checkpointLsn;
+
+    while (walFile.peek() != std::ifstream::traits_type::eof()) {
+        uint32_t len, crc;
+        try {
+            len = readValue<uint32_t>(walFile);
+            crc = readValue<uint32_t>(walFile);
+        } catch (const std::runtime_error&) {
+            break;
+        }
+
+        if (len > MAX_RECORD) break;
+
+        std::string payload(len, '\0');
+        walFile.read(payload.data(), static_cast<std::streamsize>(len));
+        if (!walFile) break;
+
+        if (crc32(payload) != crc) break;
+
+        std::istringstream in(payload, std::ios::binary);
+        Record r;
+        r.lsn = readValue<uint64_t>(in);
+        r.type = readValue<uint8_t>(in);
+        r.key = readString(in);
+
+        if (r.type == PUT_OP) {
+            r.value = readString(in);
+        } else if (r.type != REMOVE_OP) {
+            throw std::runtime_error("Unknown op code in wal.");
+        }
+
+        if (r.lsn <= checkpointLsn) continue;
+        apply(r);
+        lastLsn_ = std::max(lastLsn_, r.lsn);
+    }
 }
 
-void WAL::appendPut(const std::string &key, const std::string &value) {
+/// Logic operation for the "put".
+/// Uses a temporary stream buffer to save data, numeric values are inserted using the writeValue()
+/// function, string uses writeString().
+/// Once the stream is filled, the save is delegated to writeRecord() and the last lsn is incremented by 1.
+/// @param key: reference of the inserted key.
+/// @param value: reference of the inserted value.
+void WAL::appendPut(const std::string& key, const std::string& value) {
+    const uint64_t lsn = lastLsn_ + 1;
     std::ostringstream oss(std::ios::binary);
-    writeValue(oss, lastLsn_+1);
+    writeValue(oss, lsn);
     writeValue(oss, PUT_OP);
     writeString(oss, key);
     writeString(oss, value);
     writeRecord(oss.str());
-    lastLsn_++;
+    lastLsn_ = lsn;
 }
 
+/// Logic operation for the "remove", see appendPut() for details.
 void WAL::appendRemove(const std::string &key) {
     std::ostringstream oss(std::ios::binary);
-    writeValue(oss, lastLsn_+1);
+    const uint64_t lsn = lastLsn_ + 1;
+    writeValue(oss, lsn);
     writeValue(oss, REMOVE_OP);
-    writeValue(oss, key);
+    writeString(oss, key);
     writeRecord(oss.str());
-    lastLsn_++;
+    lastLsn_ = lsn;
 }
