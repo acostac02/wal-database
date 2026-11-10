@@ -10,4 +10,6 @@ add_executable(kwdb main.cpp
         wal/wal.h
         format.h
         test/test.cpp
-        test/test.h)
+        test/test.h
+        fileoperations/fileio.h
+        fileoperations/fileio.cpp)

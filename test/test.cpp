@@ -8,37 +8,53 @@
 
 #include "../database/database.h"
 
+namespace {
+    const std::filesystem::path DB_DIR = "../dbfile";
+    const std::filesystem::path WAL_PATH = DB_DIR / "wal.log";
+
+    void printState(Database& db) {
+        for (auto k : {"a", "b", "c"})
+            std::cout << k << (db.has(k) ? " present\n" : " absent\n");
+    }
+}
+
+// Crash after a checkpoint: "c" and remove("a") live only in the WAL.
 void testA() {
-    std::filesystem::remove_all("../dbfile");
+    std::cout << "=== testA ===\n";
+    std::filesystem::remove_all(DB_DIR);   // clean state
 
     {
         Database db;
-
         db.put("a", "1");
         db.put("b", "2");
-        db.saveToDisk();                 // a, b in snapshot (checkpoint_lsn = 2)
+        db.saveToDisk();      // checkpoint_lsn = 2
 
-        db.put("c", "3"); // only in nel (lsn 3)
-        db.remove("a");           // only in WAL (lsn 4)
-        // no saveToDisk: simulated crash, db destroyed from here.
+        db.put("c", "3");     // WAL only (lsn 3)
+        db.remove("a");       // WAL only (lsn 4)
+        // no saveToDisk: simulated crash, RAM is lost here
     }
 
     {
-        Database db;                       // snapshot + replay
-        assert(db.get("b") == "2");
-        assert(db.get("c") == "3"); //retrieved from wal
-        // "a" should not be present: get("a") throws out_of_range
-        bool threw = false;
-        try { db.get("a"); } catch (const std::out_of_range&) { threw = true; }
-        assert(threw);
+        Database db;          // snapshot + replay
+        printState(db);
+        assert(!db.has("a"));   // REMOVE replayed
+        assert(db.has("b"));    // from snapshot
+        assert(db.has("c"));    // from WAL
     }
 }
 
+// Crash in the middle of the last record: remove("a") is lost.
+// Depends on testA having just run, so call it right after testA().
 void testB() {
-    auto walPath = std::filesystem::path("../dbfile/wal.log");
-    std::filesystem::resize_file(walPath, std::filesystem::file_size(walPath)-3); //truncate
+    std::cout << "=== testB ===\n";
 
-    Database db;
-    for (auto k : {"a", "b", "c"})
-        std::cout << k << (db.has(k) ? " present\n" : " absent\n"); //should not
+    const auto size = std::filesystem::file_size(WAL_PATH);
+    std::filesystem::resize_file(WAL_PATH, size - 3);   // truncate last record
+
+    Database db;              // snapshot + replay (stops at broken record)
+    printState(db);
+    assert(db.has("a"));      // remove(lsn 4) truncated, not applied
+    assert(db.has("b"));
+    assert(db.has("c"));      // lsn 3 intact
 }
+

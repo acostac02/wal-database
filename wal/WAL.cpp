@@ -10,6 +10,8 @@
 #include "fstream"
 #include <cstring>
 
+#include "../fileoperations/fileio.h"
+
 using namespace format;
 
 namespace {
@@ -81,6 +83,8 @@ void WAL::writeRecord(const std::string &payload) {
     if (!out) {
         throw std::runtime_error("Cannot write WAL record.");
     }
+
+    syncFile(walPath);
 }
 
 /// Returns the LSN of the last record written to the WAL (or restored by
