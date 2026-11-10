@@ -9,4 +9,6 @@
 
 void syncFile(const std::filesystem::path &filePath);
 
+void atomicReplace(const std::filesystem::path &filePath, const std::filesystem::path &newPath);
+
 #endif //KWDB_FILEIO_H

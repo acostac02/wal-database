@@ -13,6 +13,9 @@ the operations recorded in the WAL.
 - In-memory store with `put`, `get`, `remove`
 - Binary snapshot file with a checkpoint LSN
 - Binary WAL with per-record CRC-32 and replay on startup
+- Durable WAL appends: each record is fsynced before `put`/`remove` returns
+- Atomic snapshots: written to `dbfile.db.tmp`, fsynced, then atomically
+  renamed over `dbfile.db` (the old snapshot stays valid until the swap)
 
 ## Roadmap
 

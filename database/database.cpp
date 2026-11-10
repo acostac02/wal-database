@@ -4,9 +4,11 @@
 
 #include "../database/database.h"
 
-#include <cstring>
 #include "../wal/WAL.h"
 #include "../format.h"
+#include "../fileoperations/fileio.h"
+
+#include <cstring>
 #include "iostream"
 #include <fstream>
 
@@ -104,9 +106,16 @@ void Database::remove(
     }
 }
 
-///Persist header and pairs (present in the data map) in the database file.
+/// Persist header and pairs (present in the data map) in the database file.
+/// data is initially saved in the .db.tmp file, then the atomic function atomicReplace() overwrite the old .db file
+/// with the new one.
+/// @throws std::runtime_error if the file cannot be opened, wrote or closed.
+/// @throws std::error_code ec if an error occurs during the replacement.
 void Database::saveToDisk() {
-    std::ofstream file(dbPath, std::ios::binary | std::ios::trunc);
+    std::filesystem::path tmpPath = dbPath;
+    tmpPath += ".tmp";
+
+    std::ofstream file(tmpPath, std::ios::binary | std::ios::trunc);
     if (!file.is_open()) {
         throw std::runtime_error("Cannot open database file for dump.");
     }
@@ -121,11 +130,22 @@ void Database::saveToDisk() {
         writeString(file, value);
     }
     file.flush();
+
     if (!file) {
         throw std::runtime_error("Cannot write database file.");
     }
-    file.close();
 
+    file.close();
+    if (file.fail())
+        throw std::runtime_error("Cannot close database file.");
+
+    try {
+        atomicReplace(tmpPath, dbPath);
+    } catch (...) {
+        std::error_code ec;
+        std::filesystem::remove(tmpPath, ec);
+        throw;
+    }
     checkpointLsn = header.checkpoint_lsn;
 }
 

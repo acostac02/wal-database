@@ -21,6 +21,11 @@ namespace {
 // Crash after a checkpoint: "c" and remove("a") live only in the WAL.
 void testA() {
     std::cout << "=== testA ===\n";
+
+    if (!std::filesystem::exists(DB_DIR)) {
+        std::cout << "INCORRECT db file dir.";
+    }
+
     std::filesystem::remove_all(DB_DIR);   // clean state
 
     {
