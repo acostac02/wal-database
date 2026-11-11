@@ -9,20 +9,23 @@ crashes, the database is rebuilt at startup from the last snapshot plus
 the operations recorded in the WAL.
 
 ## Current features
-
 - In-memory store with `put`, `get`, `remove`
 - Binary snapshot file with a checkpoint LSN
 - Binary WAL with per-record CRC-32 and replay on startup
 - Durable WAL appends: each record is fsynced before `put`/`remove` returns
 - Atomic snapshots: written to `dbfile.db.tmp`, fsynced, then atomically
   renamed over `dbfile.db` (the old snapshot stays valid until the swap)
+- Automatic checkpoint: when the WAL reaches a configurable size (default 4 MB), 
+  a snapshot is written atomically and the WAL is then truncated to its header.
 
 ## Roadmap
-
-- Atomic checkpoints (write to temp file, fsync, rename)
-- WAL truncation at the last valid record
+- Wal segmentation
+- Keep the WAL file opened between appends
+- Bit-flip corruption test
 - Concurrency (thread-safe access)
 - Key-value server with HTTP API
+- Authentication and per-user access control
+- Possibility to add more data-type saving (json, images...)
 
 ## On-disk format
 

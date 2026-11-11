@@ -208,7 +208,6 @@ void testWalTruncationInsideHeader() {
     }
 }
 
-
 void walCheckpointTest() {
     std::cout << "=== walCheckpointTest ===\n";
 
@@ -258,3 +257,35 @@ void walCheckpointTest() {
     std::cout << "ok\n";
 }
 
+/// Simulate a crash before the wal reset (fn reset()) and after the snapshot save (fn saveToDisk).
+void crashBeforeTheResetTest() {
+
+    std::cout << "===crashBeforeTheResetTest===" << std::endl;
+    std::filesystem::remove_all(DB_DIR);
+
+    {
+        Database db;
+        db.put("k1", "v1");
+        db.put("k2", "v2");
+        db.put("k3", "v3");
+        db.saveToDisk();
+        db.put("k4", "v4");
+        db.remove("k1");
+    }
+    {
+        Database db;
+        if (db.has("k1") || !db.has("k2") || !db.has("k3") || !db.has("k4")) {
+            std::cerr << "FAIL: wrong state after restart\n";
+            abort();
+        }
+        db.put("x", "x1");
+    }
+    {
+        Database db;
+        if (!db.has("x")) {
+            std::cerr << "FAIL: x lost\n";
+            abort();
+        }
+    }
+    std::cout << "ok\n";
+}

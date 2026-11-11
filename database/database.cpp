@@ -188,6 +188,7 @@ void Database::checkForCheckpoint() {
 /// checkpoint_lsn = wal.getLastLsn().
 void Database::checkpoint() {
     saveToDisk();
+    //kill here
     wal.reset();
 }
 
