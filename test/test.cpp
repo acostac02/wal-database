@@ -207,3 +207,54 @@ void testWalTruncationInsideHeader() {
         std::cout << "Iteration " << std::to_string(cut) << " OK" << std::endl;
     }
 }
+
+
+void walCheckpointTest() {
+    std::cout << "=== walCheckpointTest ===\n";
+
+    constexpr int N = 20;
+    constexpr uintmax_t MAX_THRESHOLD = 200;
+
+    std::filesystem::remove_all(DB_DIR);
+    {
+        Database db(MAX_THRESHOLD);
+        std::uintmax_t tracked = std::filesystem::file_size(WAL_PATH);
+        bool resetSeen = false;
+
+        for (int i = 1; i <= N; ++i) {
+            const auto before = std::filesystem::file_size(WAL_PATH);
+            db.put("k" + std::to_string(i), "v" + std::to_string(i));
+            const auto real = std::filesystem::file_size(WAL_PATH);
+
+            std::cout << "put k" << i
+                      << " | wal size: " << real
+                      << " | prev: " << before << '\n';
+
+            if (real < before) resetSeen = true;
+        }
+
+        if (!resetSeen) {
+            std::cerr << "FAIL: checkpoint never fired\n";
+            std::abort();
+        }
+    }
+    {
+        Database db(MAX_THRESHOLD);
+        for (int i = 1; i <= N; ++i) {
+            if (!db.has("k" + std::to_string(i))) {
+                std::cerr << "FAIL: k" << i << " missing after restart\n";
+                std::abort();
+            }
+        }
+        db.put("k21", "v21");
+    }
+    {
+        Database db(MAX_THRESHOLD);
+        if (!db.has("k21")) {
+            std::cerr << "FAIL: k21 lost (LSN restarted?)\n";
+            std::abort();
+        }
+    }
+    std::cout << "ok\n";
+}
+

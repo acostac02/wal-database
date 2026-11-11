@@ -18,6 +18,7 @@ namespace {
     constexpr uint32_t MAX_RECORD = 64 * 1024 * 1024; //64MB
     const char MAGIC[4] = {'K', 'V', 'W', 'L'};
     constexpr uint32_t WAL_VERSION = 1;
+    constexpr uint64_t HEADER_SIZE = sizeof(MAGIC) + sizeof(WAL_VERSION);
 
     void writeHeader(std::ofstream &out) {
         out.write(MAGIC, sizeof(MAGIC));
@@ -38,7 +39,7 @@ namespace {
     }
 
     /// Returns the current offset by using tellg() and throws an exception if the function returns -1.
-    std::streamoff currentOffset(std::istream& in) {
+    std::streamoff currentOffset(std::istream &in) {
         const std::streampos pos = in.tellg();
         if (pos == std::streampos(-1))
             throw std::runtime_error("tellg() failed in WAL replay.");
@@ -73,7 +74,15 @@ WAL::WAL(std::filesystem::path path)
         }
         syncFile(walPath);
     }
+
+    walSize_ = std::filesystem::file_size(walPath);
 }
+
+/// Getter for wal size
+uint64_t WAL::getWalSize() const {
+    return walSize_;
+}
+
 
 /// Appends one record to the WAL file, in append mode.
 /// Record layout: [payload size: uint32][CRC-32 of payload: uint32][payload].
@@ -97,7 +106,13 @@ void WAL::writeRecord(const std::string &payload) {
         throw std::runtime_error("Cannot write WAL record.");
     }
 
+    out.close();
+    if (out.fail()) {
+        throw std::runtime_error("Cannot close wal file after the record write.");
+    }
+
     syncFile(walPath);
+    walSize_ += bytes.size();
 }
 
 /// Returns the LSN of the last record written to the WAL (or restored by
@@ -133,7 +148,7 @@ void WAL::replay(
         try {
             len = readValue<uint32_t>(walFile);
             crc = readValue<uint32_t>(walFile);
-        } catch (const std::runtime_error&) {
+        } catch (const std::runtime_error &) {
             break;
         }
 
@@ -168,7 +183,21 @@ void WAL::replay(
         std::filesystem::resize_file(walPath, static_cast<std::uintmax_t>(validOffset));
         syncFile(walPath);
     }
+
+    walSize_ = std::filesystem::file_size(walPath);
 }
+
+/// Truncates the WAL to its header, discarding all records.
+/// Must be called only after a snapshot with checkpoint_lsn >= lastLsn()
+/// has been durably written, otherwise the discarded operations are lost.
+/// lastLsn_ is intentionally preserved so new records keep increasing LSNs.
+/// @throws std::filesystem::filesystem_error or std::runtime_error on failure.
+void WAL::reset() {
+    std::filesystem::resize_file(walPath, HEADER_SIZE);
+    syncFile(walPath);
+    walSize_ = HEADER_SIZE;
+}
+
 
 /// Logic operation for the "put".
 /// Uses a temporary stream buffer to save data, numeric values are inserted using the writeValue()
@@ -176,7 +205,7 @@ void WAL::replay(
 /// Once the stream is filled, the save is delegated to writeRecord() and the last lsn is incremented by 1.
 /// @param key: reference of the inserted key.
 /// @param value: reference of the inserted value.
-void WAL::appendPut(const std::string& key, const std::string& value) {
+void WAL::appendPut(const std::string &key, const std::string &value) {
     const uint64_t lsn = lastLsn_ + 1;
     std::ostringstream oss(std::ios::binary);
     writeValue(oss, lsn);

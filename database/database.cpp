@@ -58,9 +58,10 @@ namespace {
 
 /// Database constructor, writes the header into the db file, load last snapshot from disk and replay the wal file.
 /// @throws std::runtime_error if the db file cannot be opened for the initialization or if the header cannot be written.
-Database::Database()
+Database::Database(std::uint64_t chkpThreshold)
     : dbPath("../dbfile/dbfile.db"),
-      wal(dbPath.parent_path() / "wal.log") {
+      wal(dbPath.parent_path() / "wal.log"),
+      checkpointThreshold(chkpThreshold) { //4MB
     std::filesystem::create_directories(dbPath.parent_path());
     if (!std::filesystem::exists(dbPath)) {
         std::ofstream file(dbPath, std::ios::binary | std::ios::trunc);
@@ -88,6 +89,7 @@ void Database::put(
     const std::string &value) {
     wal.appendPut(key, value);
     data[key] = value;
+    checkForCheckpoint();
 }
 
 ///Get the value from the key from the unsorted map. The operation is not logged into the wal (simple read).
@@ -103,6 +105,7 @@ void Database::remove(
     if (data.contains(key)) {
         wal.appendRemove(key);
         data.erase(key);
+        checkForCheckpoint();
     }
 }
 
@@ -167,4 +170,26 @@ void Database::loadFromDisk() {
     }
 }
 
-bool Database::has(const std::string& key) const { return data.contains(key); }
+/// Evaluate if the wal file should make the checkpoint.
+/// The checkpoint threshold is set in the Database constructor (into the private
+/// field checkPointThreshold).
+/// If the actual wal size >= threshold checkpoint function is called.
+void Database::checkForCheckpoint() {
+    if (wal.getWalSize() < checkpointThreshold)
+        return;
+    try {
+        checkpoint();
+    } catch (std::runtime_error &e) {
+        std::cerr << "checkpoint failed: " <<e.what() << std::endl;
+    }
+}
+
+/// Actual checkpoint function. Before the reset the snapshot is saved to disk with
+/// checkpoint_lsn = wal.getLastLsn().
+void Database::checkpoint() {
+    saveToDisk();
+    wal.reset();
+}
+
+
+bool Database::has(const std::string &key) const { return data.contains(key); }

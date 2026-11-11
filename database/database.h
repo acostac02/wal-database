@@ -17,9 +17,13 @@ private:
     std::unordered_map<std::string, std::string> data;
     WAL wal;
     uint64_t checkpointLsn = 0;
+    const uint64_t checkpointThreshold = 0;
+
+    void checkForCheckpoint();
+    void checkpoint();
 
 public:
-    Database();
+    explicit Database(std::uint64_t chkpThreshold = 4 * 1024 * 1024);
 
     bool has(const std::string&) const;
 

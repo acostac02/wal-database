@@ -10,4 +10,5 @@ void testA();
 void testB();
 void testWalTruncationAfterEveryOffset();
 void testWalTruncationInsideHeader();
+void walCheckpointTest();
 #endif //KWDB_TEST_H

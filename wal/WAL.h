@@ -13,10 +13,12 @@ class WAL {
 private:
     std::filesystem::path walPath;
     uint64_t lastLsn_ = 0;
+    uint64_t walSize_ = 0;
 
     void writeRecord(const std::string &payload);
 
 public:
+
     struct Record {
         uint64_t lsn;
         uint8_t type;
@@ -30,6 +32,7 @@ public:
     explicit WAL(std::filesystem::path path);
 
     uint64_t getLastLsn() const;
+    uint64_t getWalSize() const;
 
     void appendPut(
         const std::string &key,
@@ -41,6 +44,8 @@ public:
     void replay(
         uint64_t lastLsn,
         const std::function<void(const Record&)>& apply);
+
+    void reset();
 };
 
 #endif //KWDB_WAL_H
