@@ -8,5 +8,6 @@
 #pragma once
 void testA();
 void testB();
-
+void testWalTruncationAfterEveryOffset();
+void testWalTruncationInsideHeader();
 #endif //KWDB_TEST_H

@@ -36,6 +36,14 @@ namespace {
             throw std::runtime_error("wal file version not supported: " + std::to_string(version));
         }
     }
+
+    /// Returns the current offset by using tellg() and throws an exception if the function returns -1.
+    std::streamoff currentOffset(std::istream& in) {
+        const std::streampos pos = in.tellg();
+        if (pos == std::streampos(-1))
+            throw std::runtime_error("tellg() failed in WAL replay.");
+        return pos;
+    }
 }
 
 /// Wal class constructor, generate the wal file if not exist (zero-sized file is also considered as invalid) and insert
@@ -59,6 +67,11 @@ WAL::WAL(std::filesystem::path path)
         if (!out) {
             throw std::runtime_error("Cannot write WAL header.");
         }
+        out.close();
+        if (out.fail()) {
+            throw std::runtime_error("Cannot close wal file after the header write.");
+        }
+        syncFile(walPath);
     }
 }
 
@@ -98,7 +111,7 @@ uint64_t WAL::getLastLsn() const {
 /// lsn the record is inserted into the unsorted map by using the apply function passed as argument (older record are
 /// discarded).
 /// The cycle is interrupted if the recalculated checksum does not match the extracted one, or if the size (len) exceeds
-/// the maximum value MAX_RECORD.
+/// the maximum value MAX_RECORD and then if the vald offset < file size, the file is truncated at the last valid record.
 /// @param checkpointLsn: the last checkpoint for confront.
 /// @param apply: function to the unsorted map insertion, passed by the caller.
 /// @throws std::runtime_error if the wal file cannot be opened or if an unknown op code is read.
@@ -112,6 +125,8 @@ void WAL::replay(
 
     readWalHeader(walFile);
     lastLsn_ = checkpointLsn;
+
+    std::streamoff validOffset = currentOffset(walFile);
 
     while (walFile.peek() != std::ifstream::traits_type::eof()) {
         uint32_t len, crc;
@@ -129,6 +144,7 @@ void WAL::replay(
         if (!walFile) break;
 
         if (crc32(payload) != crc) break;
+        validOffset = currentOffset(walFile);
 
         std::istringstream in(payload, std::ios::binary);
         Record r;
@@ -145,6 +161,12 @@ void WAL::replay(
         if (r.lsn <= checkpointLsn) continue;
         apply(r);
         lastLsn_ = std::max(lastLsn_, r.lsn);
+    }
+
+    walFile.close();
+    if (static_cast<std::uintmax_t>(validOffset) < std::filesystem::file_size(walPath)) {
+        std::filesystem::resize_file(walPath, static_cast<std::uintmax_t>(validOffset));
+        syncFile(walPath);
     }
 }
 
