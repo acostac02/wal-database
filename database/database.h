@@ -10,7 +10,6 @@
 
 #include "../wal/WAL.h"
 
-
 class Database {
 private:
     std::filesystem::path dbPath;
@@ -23,7 +22,14 @@ private:
     void checkpoint();
 
 public:
-    explicit Database(std::uint64_t chkpThreshold = 4 * 1024 * 1024);
+
+    static constexpr uint64_t DEFAULT_SEGMENT_SIZE = 128;
+    static constexpr uint64_t DEFAULT_THRESHOLD = 4 * 1024 * 1024;
+
+    explicit Database(
+        std::uint64_t chkpThreshold = DEFAULT_THRESHOLD,
+        uint64_t walSegmentSize = DEFAULT_SEGMENT_SIZE
+        );
 
     bool has(const std::string&) const;
 

@@ -6,10 +6,10 @@
 #define KWDB_TEST_H
 
 #pragma once
-void testA();
-void testB();
-void testWalTruncationAfterEveryOffset();
-void testWalTruncationInsideHeader();
-void walCheckpointTest();
-void crashBeforeTheResetTest();
+void walSegmentationRecoveryTest();
+void walSegmentationRemoveRecoveryTest();
+void walOperationOrderingRecoveryTest();
+void walLastSegmentTruncationEveryOffsetTest();
+void walSegmentedCheckpointTest();
+
 #endif //KWDB_TEST_H

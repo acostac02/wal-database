@@ -19,10 +19,10 @@ void syncFile(const std::filesystem::path &filePath) {
 #ifdef _WIN32
     HANDLE hFile = CreateFileW( //W stands for wide (UTF-16) not write
         filePath.c_str(),
-        GENERIC_WRITE,                      //FlushFileBuffer require write permissions
+        GENERIC_WRITE, //FlushFileBuffer require write permissions
         FILE_SHARE_READ | FILE_SHARE_WRITE, //Other handles can read and write while the file is opened
         nullptr,
-        OPEN_EXISTING,         //open only if the file exists
+        OPEN_EXISTING, //open only if the file exists
         FILE_ATTRIBUTE_NORMAL, //no special attributes
         nullptr);
 
@@ -44,6 +44,25 @@ void syncFile(const std::filesystem::path &filePath) {
 #endif
 }
 
+#ifdef __linux__
+void syncDirectory(const std::filesystem::path &directoryPath) {
+
+    int fd = ::open(
+        directoryPath.string.c_str(),
+        O_RDONLY | O_DIRECTORY
+        );
+
+    if (fd < 0) throw std::runtime_error("failed to open the directory for fsync.");
+
+    int result = ::fsync(fd);
+
+    ::close(fd);
+
+    if (result != 0) throw std::runtime_error("failed to fsync directory.");
+}
+#endif
+
+
 /// Replace the db.tmp file to .db file atomically
 void atomicReplace(const std::filesystem::path &tmpPath, const std::filesystem::path &finalPath) {
     syncFile(tmpPath);
@@ -52,11 +71,11 @@ void atomicReplace(const std::filesystem::path &tmpPath, const std::filesystem::
         tmpPath.c_str(),
         finalPath.c_str(),
         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
-        );
+    );
     if (!success) {
         DWORD error = ::GetLastError();
         throw std::runtime_error("An error occurred during the atomic replace of the database file: error code "
-            + std::to_string(error));
+                                 + std::to_string(error));
     }
 #else
     std::filesystem::rename(tmpPath, finalPath);
@@ -70,4 +89,3 @@ void atomicReplace(const std::filesystem::path &tmpPath, const std::filesystem::
     if (rc != 0) throw std::runtime_error("failed to fsync directory.");
 #endif
 }
-

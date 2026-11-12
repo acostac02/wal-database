@@ -58,9 +58,15 @@ namespace {
 
 /// Database constructor, writes the header into the db file, load last snapshot from disk and replay the wal file.
 /// @throws std::runtime_error if the db file cannot be opened for the initialization or if the header cannot be written.
-Database::Database(std::uint64_t chkpThreshold)
+Database::Database(
+    std::uint64_t chkpThreshold,
+    uint64_t walSegmentSize
+    )
     : dbPath("../dbfile/dbfile.db"),
-      wal(dbPath.parent_path() / "wal.log"),
+      wal(
+          dbPath.parent_path() / "walfiles",
+          walSegmentSize
+          ),
       checkpointThreshold(chkpThreshold) { //4MB
     std::filesystem::create_directories(dbPath.parent_path());
     if (!std::filesystem::exists(dbPath)) {
@@ -175,7 +181,7 @@ void Database::loadFromDisk() {
 /// field checkPointThreshold).
 /// If the actual wal size >= threshold checkpoint function is called.
 void Database::checkForCheckpoint() {
-    if (wal.getWalSize() < checkpointThreshold)
+    if (wal.getTotalWalSize() < checkpointThreshold)
         return;
     try {
         checkpoint();
