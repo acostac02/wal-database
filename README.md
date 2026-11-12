@@ -17,9 +17,10 @@ the operations recorded in the WAL.
   renamed over `dbfile.db` (the old snapshot stays valid until the swap)
 - Automatic checkpoint: when the WAL reaches a configurable size (default 4 MB), 
   a snapshot is written atomically and the WAL is then truncated to its header.
+- WAL segmentation with automatic segment rotation
+
 
 ## Roadmap
-- Wal segmentation
 - Keep the WAL file opened between appends
 - Bit-flip corruption test
 - Concurrency (thread-safe access)
