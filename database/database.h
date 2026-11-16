@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <shared_mutex>
 
 #include "../wal/WAL.h"
 
@@ -14,7 +15,10 @@ class Database {
 private:
     std::filesystem::path dbPath;
     std::unordered_map<std::string, std::string> data;
+
     WAL wal;
+    mutable std::shared_mutex dbMutex_;
+
     uint64_t checkpointLsn = 0;
     const uint64_t checkpointThreshold = 0;
 
@@ -31,8 +35,6 @@ public:
         uint64_t walSegmentSize = DEFAULT_SEGMENT_SIZE
         );
 
-    bool has(const std::string&) const;
-
     void put(
         const std::string& key,
         const std::string& value
@@ -41,6 +43,8 @@ public:
     std::string get(
         const std::string& key)
     const;
+
+    bool has(const std::string &key) const;
 
     void remove(const std::string& key);
 

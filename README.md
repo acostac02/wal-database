@@ -27,6 +27,7 @@ the operations recorded in the WAL.
 - Key-value server with HTTP API
 - Authentication and per-user access control
 - Possibility to add more data-type saving (json, images...)
+- Maybe make lock key-level instead of database-level
 
 ## On-disk format
 

@@ -10,5 +10,7 @@ void testSegmentRotation();
 void testSegmentRotationWithCheckpoint();
 void testLastSegmentTruncatedInsideHeader();
 void testMiddleSegmentTruncatedHeaderThrows();
+void testMutualExclusion();
+void testConcurrentMixedOperations();
 
 #endif //KWDB_TEST_H

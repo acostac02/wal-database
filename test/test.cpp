@@ -5,8 +5,10 @@
 #include "../database/database.h"
 #include <cstdio>
 #include <algorithm>
+#include <assert.h>
 #include <vector>
 #include <iostream>
+#include <thread>
 
 
 namespace {
@@ -226,5 +228,168 @@ void testMiddleSegmentTruncatedHeaderThrows() {
         std::cerr << "FAIL: corrupted middle segment was accepted\n";
         std::abort();
     }
+    std::cout << "ok\n";
+}
+
+//Mutex test
+void testMutualExclusion() {
+    std::cout << "=== testMutualExclusion ===\n";
+
+    std::filesystem::remove_all(DB_DIR);
+
+    Database db(1024ULL * 1024 * 1024, 128);
+
+    constexpr int THREADS = 4;
+    constexpr int OPS = 1000;
+
+    std::vector<std::thread> workers;
+
+    for (int t = 0; t < THREADS; ++t) {
+        workers.emplace_back([&db, t]() {
+            for (int i = 0; i < OPS; ++i) {
+                db.put(
+                    "t" + std::to_string(t) +
+                    "_k" + std::to_string(i),
+                    "value");
+            }
+        });
+    }
+
+    for (auto& th : workers) {
+        th.join();
+    }
+
+    std::size_t found = 0;
+
+    for (int t = 0; t < THREADS; ++t) {
+        for (int i = 0; i < OPS; ++i) {
+
+            if (db.has(
+                "t" + std::to_string(t) +
+                "_k" + std::to_string(i)))
+            {
+                ++found;
+            }
+        }
+    }
+
+    const std::size_t expected = THREADS * OPS;
+
+    if (found != expected) {
+        std::cerr
+            << "FAIL: expected "
+            << expected
+            << " keys, found "
+            << found
+            << '\n';
+
+        std::abort();
+    }
+
+    std::cout << "ok\n";
+}
+
+#include <barrier>
+#include <thread>
+
+void testConcurrentMixedOperations() {
+    std::cout << "=== testConcurrentMixedOperations ===\n";
+
+    constexpr int N = 1000;
+
+    std::filesystem::remove_all(DB_DIR);
+
+    Database db(
+        1024ULL * 1024 * 1024,
+        128
+    );
+
+    std::barrier phase1(3); // writer1, writer2, remover
+    std::barrier phase2(3);
+
+    std::thread writer1([&]() {
+        for (int i = 0; i < N; ++i) {
+            db.put(
+                "k" + std::to_string(i),
+                "v" + std::to_string(i));
+        }
+
+        phase1.arrive_and_wait();
+        phase2.arrive_and_wait();
+    });
+
+    std::thread writer2([&]() {
+        for (int i = N; i < 2 * N; ++i) {
+            db.put(
+                "k" + std::to_string(i),
+                "v" + std::to_string(i));
+        }
+
+        phase1.arrive_and_wait();
+        phase2.arrive_and_wait();
+    });
+
+    std::thread remover([&]() {
+
+        // aspetta che tutti i put siano finiti
+        phase1.arrive_and_wait();
+
+        for (int i = 0; i < 2 * N; i += 2) {
+            db.remove(
+                "k" + std::to_string(i));
+        }
+
+        phase2.arrive_and_wait();
+    });
+
+    writer1.join();
+    writer2.join();
+    remover.join();
+
+    std::thread reader1([&]() {
+        for (int i = 0; i < 2 * N; ++i) {
+            db.has("k" + std::to_string(i));
+        }
+    });
+
+    std::thread reader2([&]() {
+        for (int i = 0; i < 2 * N; ++i) {
+            try {
+                db.get("k" + std::to_string(i));
+            } catch (...) {
+            }
+        }
+    });
+
+    reader1.join();
+    reader2.join();
+
+    for (int i = 0; i < 2 * N; ++i) {
+
+        const std::string key =
+            "k" + std::to_string(i);
+
+        if (i % 2 == 0) {
+
+            if (db.has(key)) {
+                std::cerr
+                    << "FAIL: even key should have been removed: "
+                    << key << '\n';
+
+                std::abort();
+            }
+
+        } else {
+
+            if (!db.has(key)) {
+                std::cerr
+                    << "FAIL: odd key missing: "
+                    << key << '\n';
+
+                std::abort();
+            }
+        }
+    }
+
     std::cout << "ok\n";
 }

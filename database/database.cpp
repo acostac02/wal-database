@@ -11,6 +11,7 @@
 #include <cstring>
 #include "iostream"
 #include <fstream>
+#include <mutex>
 
 using namespace format;
 
@@ -61,13 +62,14 @@ namespace {
 Database::Database(
     std::uint64_t chkpThreshold,
     uint64_t walSegmentSize
-    )
+)
     : dbPath("../dbfile/dbfile.db"),
       wal(
           dbPath.parent_path() / "walfiles",
           walSegmentSize
-          ),
-      checkpointThreshold(chkpThreshold) { //4MB
+      ),
+      checkpointThreshold(chkpThreshold) {
+    //4MB
     std::filesystem::create_directories(dbPath.parent_path());
     if (!std::filesystem::exists(dbPath)) {
         std::ofstream file(dbPath, std::ios::binary | std::ios::trunc);
@@ -89,25 +91,74 @@ Database::Database(
     });
 }
 
-///Insert a pair key-value in the unsorted_map. Before the insertion save the log in the wal file.
+/// Inserts or updates a key-value pair.
+///
+/// The operation is first appended to the WAL and durably persisted  before the in-memory state is updated.
+/// If the key already exists, its value is replaced.
+///
+/// A checkpoint may be triggered automatically if the accumulated WAL size exceeds the configured threshold.
+///
+/// @param key Key to insert or update.
+/// @param value Value associated with the key.
+///
+/// @throws std::runtime_error if WAL persistence fails.
 void Database::put(
     const std::string &key,
     const std::string &value) {
+    std::unique_lock<std::shared_mutex> lock(dbMutex_);
+
     wal.appendPut(key, value);
     data[key] = value;
     checkForCheckpoint();
 }
 
-///Get the value from the key from the unsorted map. The operation is not logged into the wal (simple read).
-std::string Database::get(
-    const std::string &key)
-const {
-    return data.at(key);
+/// Returns the value associated with a key.
+///
+/// The lookup is performed on the in-memory store and does not access disk. Multiple concurrent readers may
+/// execute this operation simultaneously.
+///
+/// @param key Key to search.
+///
+/// @return The value associated with the key.
+///
+/// @throws std::runtime_error if the key does not exist.
+std::string Database::get(const std::string &key) const {
+    std::shared_lock<std::shared_mutex> lock(dbMutex_);
+
+    const auto it = data.find(key);
+    if (it == data.end()) {
+        throw std::runtime_error("Key not found in database.");
+    }
+    return it->second;
 }
 
-///Remove a key-value pair from the unsorted_map. The operation is logged into the wal-file before the actual delete.
-void Database::remove(
-    const std::string &key) {
+/// Check if a key is present in the database.
+///
+/// The lookup is performed on the in-memory store and does not access disk. Multiple concurrent readers may
+/// execute this operation simultaneously.
+///
+/// @param key Key to search.
+///
+/// @return true if the key is present, false otherwise.
+bool Database::has(const std::string &key) const {
+    std::shared_lock<std::shared_mutex> lock(dbMutex_);
+
+    return data.contains(key);
+}
+
+/// Removes a key from the database.
+///
+/// If the key exists, a REMOVE record is durably appended to the WAL before the entry is erased from
+/// the in-memory store. If the key does not exist, the operation has no effect.
+///
+/// A checkpoint may be triggered automatically if the accumulated WAL size exceeds the configured threshold.
+///
+/// @param key Key to remove.
+///
+/// @throws std::runtime_error if WAL persistence fails.
+void Database::remove(const std::string &key) {
+    std::unique_lock<std::shared_mutex> lock(dbMutex_);
+
     if (data.contains(key)) {
         wal.appendRemove(key);
         data.erase(key);
@@ -186,17 +237,21 @@ void Database::checkForCheckpoint() {
     try {
         checkpoint();
     } catch (std::runtime_error &e) {
-        std::cerr << "checkpoint failed: " <<e.what() << std::endl;
+        std::cerr << "checkpoint failed: " << e.what() << std::endl;
     }
 }
 
-/// Actual checkpoint function. Before the reset the snapshot is saved to disk with
-/// checkpoint_lsn = wal.getLastLsn().
+/// Creates a database checkpoint.
+///
+/// The operation is protected by an exclusive lock to prevent
+/// concurrent reads and writes while the checkpoint is being built.
+///
+/// First, the current in-memory state is atomically persisted into
+/// the snapshot file. Once the snapshot is durably written, the WAL
+/// is reset and a new segment is created.
 void Database::checkpoint() {
+    std::unique_lock<std::shared_mutex> lock(dbMutex_);
+
     saveToDisk();
-    //kill here
     wal.reset();
 }
-
-
-bool Database::has(const std::string &key) const { return data.contains(key); }
