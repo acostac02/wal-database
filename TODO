@@ -1,1 +1,1 @@
-DONE: wal file truncation in the replay method
+Inserted current open wal segment as member of WAL to avoid opening multiple times for insertion.

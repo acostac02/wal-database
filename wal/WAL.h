@@ -6,7 +6,8 @@
 #define KWDB_WAL_H
 #include <filesystem>
 #include <functional>
-#include <optional>
+#include <optional>7
+#include <fstream>
 
 class Database;
 
@@ -17,6 +18,8 @@ public:
         std::filesystem::path path,
         uint64_t maxSegmentSize
         );
+
+    ~WAL();
 
     struct Record {
         uint64_t lsn;
@@ -52,6 +55,7 @@ private:
     uint64_t currentSegmentId_ = 0;
     uint64_t currentSegmentSize_ = 0;
     uint64_t totalWalSize_ = 0;
+    std::ofstream currentActiveSegment_;
 
     void writeRecord(const std::string &payload);
 

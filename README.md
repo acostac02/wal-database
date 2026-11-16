@@ -18,10 +18,10 @@ the operations recorded in the WAL.
 - Automatic checkpoint: when the WAL reaches a configurable size (default 4 MB), 
   a snapshot is written atomically and the WAL is then truncated to its header.
 - WAL segmentation with automatic segment rotation
-
+- Persistent WAL writer: the active WAL segment remains open between appends 
+  and is fsynced after each record
 
 ## Roadmap
-- Keep the WAL file opened between appends
 - Bit-flip corruption test
 - Concurrency (thread-safe access)
 - Key-value server with HTTP API
@@ -37,5 +37,5 @@ Snapshot (dbfile.db):
   magic "KVDB" | version u32 | checkpoint_lsn u64 | count u64 | pairs...
 
 WAL (wal.log):
-  magic "KVWL" | version u32 | records...
+  magic "KVWL" | version u32 | first lsn uint64_t | records...
   record: len u32 | crc32 u32 | payload (lsn u64 | op u8 | key | value)

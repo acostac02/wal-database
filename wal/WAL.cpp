@@ -23,12 +23,14 @@ namespace {
     const std::string PREFIX = "wal_";
     const std::string SUFFIX = ".log";
 
+    /// Writes the wal file header, composed as: magic "KVWL" | version u32 | first lsn uint64_t
     void writeHeader(std::ofstream &out, uint64_t firstLsn) {
         out.write(MAGIC, sizeof(MAGIC));
         writeValue(out, WAL_VERSION);
         writeValue(out, firstLsn);
     }
 
+    /// Read the wal file header, check magic and version, returns the first lsn
     uint64_t readWalHeader(std::istream &walFile) {
         char magic[4];
         walFile.read(magic, sizeof(magic));
@@ -81,10 +83,22 @@ namespace {
     }
 }
 
-/// Wal class constructor, if the wal files directory does not exist is created and the
-/// first segment file is inserted (file + header). The file is created even if the dir
-/// exist but is empty.
-/// @param path the path where the directory is created.
+/// Constructs and initializes the WAL subsystem.
+///
+/// The WAL directory is created if it does not already exist.
+/// Existing WAL segments are discovered and the segment with the highest identifier is selected as the
+/// active segment.
+///
+/// If no segment is found, the first segment (`wal_000000.log`) is created together with its header.
+///
+/// The current segment size and the total WAL size are reconstructed from the files present on disk.
+/// The active segment is then opened in append mode and kept open for the lifetime of the WAL instance.
+///
+/// @param path Directory containing WAL segment files.
+/// @param maxSegmentSize Maximum size (in bytes) allowed for a single
+///        WAL segment before automatic rotation occurs.
+///
+/// @throws std::runtime_error if the active WAL segment cannot be opened.
 WAL::WAL(
     std::filesystem::path path,
     uint64_t maxSegmentSize
@@ -101,11 +115,26 @@ WAL::WAL(
     currentSegmentId_ = *last;
     currentSegmentSize_ = std::filesystem::file_size(currentSegmentPath());
 
+    currentActiveSegment_.open(
+        currentSegmentPath(),
+        std::ios::binary | std::ios::app);
+    if (!currentActiveSegment_.is_open()) {
+        throw std::runtime_error("Cannot open current WAL segment.");
+    }
+
     totalWalSize_ = 0;
     for (auto const &segment: discoverSegments()) {
         totalWalSize_ += std::filesystem::file_size(segment);
     }
 }
+
+WAL::~WAL() {
+    if (currentActiveSegment_.is_open()) {
+        currentActiveSegment_.flush();
+        currentActiveSegment_.close();
+    }
+}
+
 
 /// Iterates through wal files, returns the last segment id.
 std::optional<uint64_t> WAL::discoverLastSegmentId() {
@@ -184,8 +213,27 @@ void WAL::createWalFile(uint64_t segmentId, uint64_t firstLsn) {
 }
 
 void WAL::rotateSegment() {
-    createWalFile(currentSegmentId_ + 1, lastLsn_ + 1);
+    currentActiveSegment_.flush();
+    if (!currentActiveSegment_) {
+        throw std::runtime_error(
+            "Cannot flush current WAL segment."
+        );
+    }
+    currentActiveSegment_.close();
+
     ++currentSegmentId_;
+    createWalFile(currentSegmentId_, lastLsn_ + 1);
+
+    currentActiveSegment_.open(
+        currentSegmentPath(),
+        std::ios::binary | std::ios::app);
+
+    if (!currentActiveSegment_.is_open()) {
+        throw std::runtime_error(
+            "Cannot open new WAL segment."
+        );
+    }
+
     currentSegmentSize_ = HEADER_SIZE;
 }
 
@@ -212,27 +260,16 @@ void WAL::writeRecord(const std::string &payload) {
         rotateSegment();
     }
 
-    std::ofstream out(currentSegmentPath(), std::ios::binary | std::ios::app);
-
-    if (!out.is_open()) {
-        throw std::runtime_error("Cannot open WAL file for append.");
-    }
-
     std::ostringstream rec(std::ios::binary);
     writeValue(rec, static_cast<uint32_t>(payload.size()));
     writeValue(rec, crc32(payload));
     rec.write(payload.data(), static_cast<std::streamsize>(payload.size()));
 
     const std::string bytes = rec.str();
-    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-    out.flush();
-    if (!out) {
+    currentActiveSegment_.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    currentActiveSegment_.flush();
+    if (!currentActiveSegment_) {
         throw std::runtime_error("Cannot write WAL record.");
-    }
-
-    out.close();
-    if (out.fail()) {
-        throw std::runtime_error("Cannot close wal file after the record write.");
     }
 
     syncFile(currentSegmentPath());
@@ -246,15 +283,19 @@ uint64_t WAL::getLastLsn() const {
     return lastLsn_;
 }
 
-/// Opens the wal file for the replay.
-/// After checking the header (magic and version), read the file records and if the lsn is greater than the checkpoint
-/// lsn the record is inserted into the unsorted map by using the apply function passed as argument (older record are
-/// discarded).
-/// The cycle is interrupted if the recalculated checksum does not match the extracted one, or if the size (len) exceeds
-/// the maximum value MAX_RECORD and then if the vald offset < file size, the file is truncated at the last valid record.
-/// @param checkpointLsn: the last checkpoint for confront.
-/// @param apply: function to the unsorted map insertion, passed by the caller.
-/// @throws std::runtime_error if the wal file cannot be opened or if an unknown op code is read.
+/// Replays a single WAL segment.
+///
+/// The segment header is validated before iterating over records.
+/// Each record is verified through its CRC-32 checksum before being deserialized and applied. Replay stops
+/// at the first corrupted, incomplete or truncated record.
+///
+/// If an invalid record is encountered, the segment is truncated to the last valid offset so that future
+/// startups do not repeatedly process the same corruption.
+///
+/// @param segment Path of the segment being replayed.
+/// @param checkpointLsn Snapshot checkpoint LSN.
+/// @param apply Callback invoked for every recovered record whose
+///        LSN is greater than checkpointLsn.
 void WAL::replaySegment(
     const std::filesystem::path &segment,
     uint64_t checkpointLsn,
@@ -346,8 +387,24 @@ std::vector<std::filesystem::path> WAL::discoverSegments() const {
     return validSegments;
 }
 
-/// Retrieve the wal file paths and call replaySegment() for each.
-/// Before replaying the last segment, if the size is < than the header size
+/// Replays all WAL segments and restores database state.
+///
+/// WAL segments are discovered, ordered by segment identifier and processed sequentially from oldest to newest.
+/// For each segment, valid records whose LSN is greater than the snapshot checkpoint LSN are deserialized and
+/// applied through the callback supplied by the caller.
+///
+/// Corrupted, incomplete or truncated records are ignored from the first invalid offset onward. The affected
+/// segment is automatically truncated to the last known valid position.
+///
+/// During replay, the highest observed LSN is tracked and stored in lastLsn_ so that newly appended records
+/// continue with monotonically increasing sequence numbers.
+///
+/// @param checkpointLsn Last checkpoint LSN stored in the snapshot.
+///        Records with LSN <= checkpointLsn are skipped.
+/// @param apply Callback invoked for each recovered record.
+///
+/// @throws std::runtime_error if a WAL segment cannot be opened, contains an invalid header or contains an unknown
+///         operation code.
 void WAL::replay(
     uint64_t checkpointLsn,
     const std::function<void(const Record &)> &apply) {
@@ -386,16 +443,30 @@ void WAL::replay(
     refreshSizes();
 }
 
-/// Delete all files in the wal files directory, then generates a fresh wal file
-/// (id is not set to 0, instead is serial with the last one).
+/// Resets the WAL after a successful checkpoint.
+///
+/// The currently active segment is flushed and closed. A new WAL segment is then created using the next
+/// segment identifier and opened as the active segment.
+///
+/// All older WAL segments are removed because their changes are already reflected in the persisted snapshot.
+/// The total WAL size and current segment size are reset to the size of a segment containing only its header.
+///
+/// On POSIX systems, the WAL directory metadata is synchronized after segment cleanup to improve durability
+/// of file creation and deletion operations.
+///
+/// The current LSN is intentionally preserved so that newly appended records continue with monotonically
+/// increasing LSNs.
+///
+/// @throws std::runtime_error on segment creation/open failures.
 void WAL::reset() {
-    createWalFile(currentSegmentId_ + 1, lastLsn_ + 1);
+    currentActiveSegment_.flush();
+    if (!currentActiveSegment_) {
+        throw std::runtime_error("Cannot flush current wal segment.");
+    }
+    currentActiveSegment_.close();
+
     ++currentSegmentId_;
-
-    totalWalSize_ = HEADER_SIZE;
-    currentSegmentSize_ = HEADER_SIZE;
-
-    syncDirectory(walFilesDir);
+    createWalFile(currentSegmentId_, lastLsn_ + 1);
 
     for (auto const &segment: discoverSegments()) {
         if (extractSegmentId(segment) < currentSegmentId_) {
@@ -406,11 +477,27 @@ void WAL::reset() {
             }
         }
     }
+
+#ifndef _WIN32
+    syncDirectory(walFilesDir);
+#endif
+
+    currentActiveSegment_.open(
+        currentSegmentPath(),
+        std::ios::binary | std::ios::app
+        );
+
+    if (!currentActiveSegment_.is_open()) {
+        throw std::runtime_error("Cannot open current wal segment.");
+    }
+
+    totalWalSize_ = HEADER_SIZE;
+    currentSegmentSize_ = HEADER_SIZE;
 }
 
 /// Logic operation for the "put".
-/// Uses a temporary stream buffer to save data, numeric values are inserted using the writeValue()
-/// function, string uses writeString().
+/// Uses a temporary stream buffer to save data, numeric values are inserted using the writeValue() function,
+/// string uses writeString().
 /// Once the stream is filled, the save is delegated to writeRecord() and the last lsn is incremented by 1.
 /// @param key: reference of the inserted key.
 /// @param value: reference of the inserted value.
