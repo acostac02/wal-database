@@ -44,23 +44,20 @@ void syncFile(const std::filesystem::path &filePath) {
 #endif
 }
 
-#ifdef __linux__
 void syncDirectory(const std::filesystem::path &directoryPath) {
+#ifndef _WIN32
 
-    int fd = ::open(
-        directoryPath.string.c_str(),
-        O_RDONLY | O_DIRECTORY
-        );
+    int fd = ::open(directoryPath.c_str(), O_RDONLY | O_DIRECTORY);
 
     if (fd < 0) throw std::runtime_error("failed to open the directory for fsync.");
-
     int result = ::fsync(fd);
-
     ::close(fd);
 
     if (result != 0) throw std::runtime_error("failed to fsync directory.");
-}
+#else
+    (void)directoryPath;
 #endif
+}
 
 
 /// Replace the db.tmp file to .db file atomically

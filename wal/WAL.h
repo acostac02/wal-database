@@ -46,7 +46,7 @@ public:
     void reset();
 
 private:
-    std::filesystem::path walFiesDir;
+    std::filesystem::path walFilesDir;
     uint64_t lastLsn_ = 0;
     uint64_t maxSegmentSize_ = 0;
     uint64_t currentSegmentId_ = 0;
@@ -55,7 +55,7 @@ private:
 
     void writeRecord(const std::string &payload);
 
-    void createWalFile(uint64_t segmentId);
+    void createWalFile(uint64_t segmentId, uint64_t firstLsn);
 
     std::optional<uint64_t> discoverLastSegmentId();
 
@@ -66,7 +66,8 @@ private:
     void replaySegment(
         const std::filesystem::path& segment,
         uint64_t checkpointLsn,
-        const std::function<void(const Record &)> &apply
+        const std::function<void(const Record &)> &apply,
+        bool isLast
         );
 
     std::vector<std::filesystem::path> discoverSegments() const;
@@ -74,6 +75,8 @@ private:
     bool canFitRecord(uint64_t recordSize) const;
 
     void rotateSegment();
+
+    void refreshSizes();
 };
 
 #endif //KWDB_WAL_H

@@ -23,8 +23,8 @@ private:
 
 public:
 
-    static constexpr uint64_t DEFAULT_SEGMENT_SIZE = 128;
-    static constexpr uint64_t DEFAULT_THRESHOLD = 4 * 1024 * 1024;
+    static constexpr uint64_t DEFAULT_SEGMENT_SIZE = 16 * 1024 * 1024;
+    static constexpr uint64_t DEFAULT_THRESHOLD = 64 * 1024 * 1024;
 
     explicit Database(
         std::uint64_t chkpThreshold = DEFAULT_THRESHOLD,

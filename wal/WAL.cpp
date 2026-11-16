@@ -19,16 +19,17 @@ namespace {
     constexpr uint32_t MAX_RECORD = 64 * 1024 * 1024; //64MB
     const char MAGIC[4] = {'K', 'V', 'W', 'L'};
     constexpr uint32_t WAL_VERSION = 1;
-    constexpr uint64_t HEADER_SIZE = sizeof(MAGIC) + sizeof(WAL_VERSION);
+    constexpr uint64_t HEADER_SIZE = sizeof(MAGIC) + sizeof(WAL_VERSION) + sizeof(uint64_t);
     const std::string PREFIX = "wal_";
     const std::string SUFFIX = ".log";
 
-    void writeHeader(std::ofstream &out) {
+    void writeHeader(std::ofstream &out, uint64_t firstLsn) {
         out.write(MAGIC, sizeof(MAGIC));
         writeValue(out, WAL_VERSION);
+        writeValue(out, firstLsn);
     }
 
-    void readWalHeader(std::istream &walFile) {
+    uint64_t readWalHeader(std::istream &walFile) {
         char magic[4];
         walFile.read(magic, sizeof(magic));
         if (!walFile || memcmp(magic, MAGIC, 4) != 0) {
@@ -39,6 +40,9 @@ namespace {
         if (version != WAL_VERSION) {
             throw std::runtime_error("wal file version not supported: " + std::to_string(version));
         }
+
+        const auto firstLsn = readValue<uint64_t>(walFile);
+        return firstLsn;
     }
 
     /// Returns the current offset by using tellg() and throws an exception if the function returns -1.
@@ -64,6 +68,15 @@ namespace {
             dotPos - underscorePos - 1
         );
 
+        if (serial.empty())
+            throw std::runtime_error("Invalid segment id: empty serial.");
+
+        for (unsigned char c: serial) {
+            if (!std::isdigit(c)) {
+                throw std::runtime_error("Invalid character in WAL file name." + filename);
+            }
+        }
+
         return std::stoull(serial);
     }
 }
@@ -76,20 +89,20 @@ WAL::WAL(
     std::filesystem::path path,
     uint64_t maxSegmentSize
 )
-    : walFiesDir(std::move(path)),
+    : walFilesDir(std::move(path)),
       maxSegmentSize_(maxSegmentSize) {
-    std::filesystem::create_directories(walFiesDir);
+    std::filesystem::create_directories(walFilesDir);
 
     auto last = discoverLastSegmentId();
     if (!last) {
-        createWalFile(0);
+        createWalFile(0, 1);
         last = 0;
     }
     currentSegmentId_ = *last;
     currentSegmentSize_ = std::filesystem::file_size(currentSegmentPath());
 
     totalWalSize_ = 0;
-    for (auto const& segment : discoverSegments()) {
+    for (auto const &segment: discoverSegments()) {
         totalWalSize_ += std::filesystem::file_size(segment);
     }
 }
@@ -98,7 +111,7 @@ WAL::WAL(
 std::optional<uint64_t> WAL::discoverLastSegmentId() {
     std::optional<uint64_t> lastId;
 
-    for (auto const dirEntry: std::filesystem::directory_iterator(walFiesDir)) {
+    for (auto const dirEntry: std::filesystem::directory_iterator(walFilesDir)) {
         if (!dirEntry.is_regular_file()) {
             continue;
         }
@@ -113,6 +126,16 @@ std::optional<uint64_t> WAL::discoverLastSegmentId() {
     return lastId;
 }
 
+/// Refresh the current (total) wal files size.
+/// Check and set the current segment size and the total wal files size.
+void WAL::refreshSizes() {
+    currentSegmentSize_ = std::filesystem::file_size(currentSegmentPath());
+    totalWalSize_ = 0;
+    for (auto const &segment: discoverSegments()) {
+        totalWalSize_ += std::filesystem::file_size(segment);
+    }
+}
+
 /// Build a wal segment path with the id passed as argument.
 std::filesystem::path WAL::segmentPath(uint64_t segmentId) const {
     std::ostringstream oss;
@@ -123,7 +146,7 @@ std::filesystem::path WAL::segmentPath(uint64_t segmentId) const {
             << segmentId
             << SUFFIX;
 
-    return walFiesDir / oss.str();
+    return walFilesDir / oss.str();
 }
 
 /// Build and return the current wal segment path.
@@ -141,14 +164,14 @@ bool WAL::canFitRecord(uint64_t recordSize) const {
 /// wal_000000.log, wal_000001.log, wal_000002.log, ...
 /// After creation, the WAL header is written, flushed,
 /// and forced to stable storage using fsync().
-void WAL::createWalFile(uint64_t segmentId) {
+void WAL::createWalFile(uint64_t segmentId, uint64_t firstLsn) {
     auto walPath = segmentPath(segmentId);
 
     std::ofstream file(walPath, std::ios::binary);
     if (!file.is_open()) {
         throw std::runtime_error("Cannot create wal segment.");
     }
-    writeHeader(file);
+    writeHeader(file, firstLsn);
 
     file.flush();
     if (!file) {
@@ -161,7 +184,7 @@ void WAL::createWalFile(uint64_t segmentId) {
 }
 
 void WAL::rotateSegment() {
-    createWalFile(currentSegmentId_ + 1);
+    createWalFile(currentSegmentId_ + 1, lastLsn_ + 1);
     ++currentSegmentId_;
     currentSegmentSize_ = HEADER_SIZE;
 }
@@ -235,7 +258,8 @@ uint64_t WAL::getLastLsn() const {
 void WAL::replaySegment(
     const std::filesystem::path &segment,
     uint64_t checkpointLsn,
-    const std::function<void(const Record &)> &apply
+    const std::function<void(const Record &)> &apply,
+    bool isLast
 ) {
     std::ifstream walFile(segment, std::ios::binary);
     if (!walFile.is_open()) {
@@ -284,7 +308,11 @@ void WAL::replaySegment(
 
     walFile.close();
 
-    if (static_cast<std::uintmax_t>(validOffset) < std::filesystem::file_size(segment)) {
+    const auto size = std::filesystem::file_size(segment);
+    if (static_cast<std::uintmax_t>(validOffset) < size) {
+        if (!isLast) {
+            throw std::runtime_error("Corrupted record in non-final wal segment: " + segment.string());
+        }
         std::filesystem::resize_file(segment, static_cast<std::uintmax_t>(validOffset));
         syncFile(segment);
     }
@@ -295,15 +323,17 @@ void WAL::replaySegment(
 std::vector<std::filesystem::path> WAL::discoverSegments() const {
     std::vector<std::filesystem::path> validSegments;
 
-    for (auto const entry: std::filesystem::directory_iterator(walFiesDir)) {
+    for (auto const entry: std::filesystem::directory_iterator(walFilesDir)) {
         //before checking that the file name is valid, check if is a dir and if its regular...
-        if (std::filesystem::is_regular_file(entry)) {
-            //check the filename
-            std::string filename(entry.path().filename().string());
-            if (!filename.starts_with(PREFIX) || !filename.ends_with(SUFFIX)) {
-                continue;
-            }
+        if (!is_regular_file(entry)) continue;
+
+        try {
+            extractSegmentId(entry.path());
             validSegments.push_back(entry.path());
+
+        } catch (const std::exception &e) {
+            std::cerr << "ignoring file " << entry.path().filename()
+                    << ": " << e.what() << std::endl;
         }
     }
     std::sort(
@@ -317,35 +347,65 @@ std::vector<std::filesystem::path> WAL::discoverSegments() const {
 }
 
 /// Retrieve the wal file paths and call replaySegment() for each.
+/// Before replaying the last segment, if the size is < than the header size
 void WAL::replay(
     uint64_t checkpointLsn,
     const std::function<void(const Record &)> &apply) {
     lastLsn_ = checkpointLsn;
 
-    std::vector<std::filesystem::path> segments = discoverSegments();
-    for (auto const &segment: segments) {
-        replaySegment(segment, checkpointLsn, apply);
+    const auto segments = discoverSegments();
+    if (segments.empty()) {
+        refreshSizes();
+        return;
     }
+
+    for (size_t i = 0; i + 1 < segments.size(); ++i) {
+        replaySegment(segments[i], checkpointLsn, apply, false);
+    }
+
+    const auto &last = segments.back();
+    if (std::filesystem::file_size(last) < HEADER_SIZE) {
+        {
+            std::ifstream file(last, std::ios::binary);
+            char magic[4] = {};
+            file.read(magic, sizeof(magic));
+            const auto got = static_cast<size_t>(file.gcount());
+
+            if (got > 0 && memcmp(magic, MAGIC, got) != 0) {
+                throw std::runtime_error("Incorrect magic in last wal segment.");
+            }
+        }
+
+        std::filesystem::remove(last);
+        createWalFile(currentSegmentId_, lastLsn_ + 1);
+        syncDirectory(walFilesDir);
+    } else {
+        replaySegment(last, checkpointLsn, apply, true);
+    }
+
+    refreshSizes();
 }
 
 /// Delete all files in the wal files directory, then generates a fresh wal file
 /// (id is not set to 0, instead is serial with the last one).
 void WAL::reset() {
-    for (auto const &segment: discoverSegments()) {
-        std::filesystem::remove(segment);
-    }
-    currentSegmentId_++;
-    createWalFile(currentSegmentId_);
+    createWalFile(currentSegmentId_ + 1, lastLsn_ + 1);
+    ++currentSegmentId_;
+
     totalWalSize_ = HEADER_SIZE;
     currentSegmentSize_ = HEADER_SIZE;
 
-    std::cout
-    << "CHECKPOINT RESET -> "
-    << currentSegmentId_ + 1
-    << '\n';
-#ifdef __linux__
-    syncDirectory(walFiesDir);
-#endif
+    syncDirectory(walFilesDir);
+
+    for (auto const &segment: discoverSegments()) {
+        if (extractSegmentId(segment) < currentSegmentId_) {
+            std::error_code ec;
+            std::filesystem::remove(segment, ec);
+            if (ec) {
+                std::cerr << "Cannot remove old wal segment: " << ec.message() << std::endl;
+            }
+        }
+    }
 }
 
 /// Logic operation for the "put".
