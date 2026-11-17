@@ -12,4 +12,7 @@ add_executable(kwdb main.cpp
         test/test.cpp
         test/test.h
         fileoperations/fileio.h
-        fileoperations/fileio.cpp)
+        fileoperations/fileio.cpp
+        userDatabase/UserDatabase.cpp
+        userDatabase/UserDatabase.h
+        crypto/AES.h)

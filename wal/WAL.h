@@ -6,45 +6,51 @@
 #define KWDB_WAL_H
 #include <filesystem>
 #include <functional>
-#include <optional>7
+#include <optional>
 #include <fstream>
 
 class Database;
 
-class WAL {
+struct Record {
+    uint64_t lsn;
+    uint64_t ownerId;
+    uint8_t type;
+    std::string key;
+    std::string value;
+};
 
+class WAL {
 public:
     explicit WAL(
         std::filesystem::path path,
         uint64_t maxSegmentSize
-        );
+    );
 
     ~WAL();
-
-    struct Record {
-        uint64_t lsn;
-        uint8_t type;
-        std::string key;
-        std::string value;
-    };
 
     static constexpr uint8_t PUT_OP = 0x01;
     static constexpr uint8_t REMOVE_OP = 0x02;
 
     uint64_t getLastLsn() const;
+
     uint64_t getMaxSegmentSize() const;
+
     uint64_t getTotalWalSize() const;
 
     void appendPut(
+        uint64_t ownerId,
         const std::string &key,
-        const std::string &value);
+        const std::string &value
+    );
 
     void appendRemove(
-        const std::string &key);
+        uint64_t ownerId,
+        const std::string &key
+    );
 
     void replay(
         uint64_t lastLsn,
-        const std::function<void(const Record&)>& apply);
+        const std::function<void(const Record &)> &apply);
 
     void reset();
 
@@ -68,11 +74,11 @@ private:
     std::filesystem::path currentSegmentPath() const;
 
     void replaySegment(
-        const std::filesystem::path& segment,
+        const std::filesystem::path &segment,
         uint64_t checkpointLsn,
         const std::function<void(const Record &)> &apply,
         bool isLast
-        );
+    );
 
     std::vector<std::filesystem::path> discoverSegments() const;
 

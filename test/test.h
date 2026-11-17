@@ -6,11 +6,6 @@
 #define KWDB_TEST_H
 
 #pragma once
-void testSegmentRotation();
-void testSegmentRotationWithCheckpoint();
-void testLastSegmentTruncatedInsideHeader();
-void testMiddleSegmentTruncatedHeaderThrows();
-void testMutualExclusion();
-void testConcurrentMixedOperations();
+void testOwnerIsolation();
 
 #endif //KWDB_TEST_H

@@ -18,13 +18,6 @@ using namespace format;
 namespace {
     constexpr char MAGIC[4] = {'K', 'V', 'D', 'B'};
 
-    struct Header {
-        uint32_t version = 1;
-        uint64_t checkpoint_lsn = 0;
-        uint64_t count = 0;
-    };
-
-
     /// Write the database file header into the specified ofstream.
     /// @param out reference of the file stream where to write the header.
     /// @param header reference if the header struct.
@@ -47,7 +40,7 @@ namespace {
 
         Header h{};
         h.version = readValue<uint32_t>(in);
-        if (h.version != 1) {
+        if (h.version != 2) {
             throw std::runtime_error("Incorrect version in database.");
         }
         h.checkpoint_lsn = readValue<uint64_t>(in);
@@ -85,9 +78,11 @@ Database::Database(
     }
 
     loadFromDisk();
-    wal.replay(checkpointLsn, [this](const WAL::Record &r) {
-        if (r.type == WAL::PUT_OP) data[r.key] = r.value;
-        else if (r.type == WAL::REMOVE_OP) data.erase(r.key);
+    wal.replay(checkpointLsn, [this](const Record &r) {
+        const Key k{r.ownerId, r.key};
+
+        if (r.type == WAL::PUT_OP) data[k] = r.value;
+        else if (r.type == WAL::REMOVE_OP) data.erase(k);
     });
 }
 
@@ -103,12 +98,13 @@ Database::Database(
 ///
 /// @throws std::runtime_error if WAL persistence fails.
 void Database::put(
+    uint64_t ownerId,
     const std::string &key,
     const std::string &value) {
     std::unique_lock<std::shared_mutex> lock(dbMutex_);
 
-    wal.appendPut(key, value);
-    data[key] = value;
+    wal.appendPut(ownerId, key, value);
+    data[Key{ownerId, key}] = value;
     checkForCheckpoint();
 }
 
@@ -121,13 +117,16 @@ void Database::put(
 ///
 /// @return The value associated with the key.
 ///
-/// @throws std::runtime_error if the key does not exist.
-std::string Database::get(const std::string &key) const {
+/// @throws std::out_of_range if the key does not exist.
+std::optional<std::string> Database::get(
+    uint64_t ownerId,
+    const std::string &key
+) const {
     std::shared_lock<std::shared_mutex> lock(dbMutex_);
 
-    const auto it = data.find(key);
+    const auto it = data.find(Key{ownerId, key});
     if (it == data.end()) {
-        throw std::runtime_error("Key not found in database.");
+        return std::nullopt;
     }
     return it->second;
 }
@@ -140,10 +139,10 @@ std::string Database::get(const std::string &key) const {
 /// @param key Key to search.
 ///
 /// @return true if the key is present, false otherwise.
-bool Database::has(const std::string &key) const {
+bool Database::has(uint64_t ownerId, const std::string &key) const {
     std::shared_lock<std::shared_mutex> lock(dbMutex_);
 
-    return data.contains(key);
+    return data.contains(Key{ownerId, key});
 }
 
 /// Removes a key from the database.
@@ -156,12 +155,12 @@ bool Database::has(const std::string &key) const {
 /// @param key Key to remove.
 ///
 /// @throws std::runtime_error if WAL persistence fails.
-void Database::remove(const std::string &key) {
+void Database::remove(uint64_t ownerId, const std::string &key) {
     std::unique_lock<std::shared_mutex> lock(dbMutex_);
 
-    if (data.contains(key)) {
-        wal.appendRemove(key);
-        data.erase(key);
+    if (data.contains(Key{ownerId, key})) {
+        wal.appendRemove(ownerId, key);
+        data.erase(Key{ownerId, key});
         checkForCheckpoint();
     }
 }
@@ -185,9 +184,10 @@ void Database::saveToDisk() {
     header.count = data.size();
     writeHeader(file, header);
 
-    for (const auto &[key, value]: data) {
-        writeString(file, key);
-        writeString(file, value);
+    for (const auto &[k, value]: data) {
+        writeValue(file,k.ownerId);
+        writeString(file,k.key);
+        writeString(file,value);
     }
     file.flush();
 
@@ -221,9 +221,10 @@ void Database::loadFromDisk() {
     data.clear();
 
     for (uint64_t i = 0; i < header.count; i++) {
+        const auto ownerId = readValue<uint64_t>(file);
         std::string key = readString(file);
         std::string value = readString(file);
-        data[std::move(key)] = std::move(value);
+        data[Key{ownerId, std::move(key)}] = std::move(value);
     }
 }
 

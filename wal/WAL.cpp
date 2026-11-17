@@ -18,7 +18,7 @@ using namespace format;
 namespace {
     constexpr uint32_t MAX_RECORD = 64 * 1024 * 1024; //64MB
     const char MAGIC[4] = {'K', 'V', 'W', 'L'};
-    constexpr uint32_t WAL_VERSION = 1;
+    constexpr uint32_t WAL_VERSION = 2;
     constexpr uint64_t HEADER_SIZE = sizeof(MAGIC) + sizeof(WAL_VERSION) + sizeof(uint64_t);
     const std::string PREFIX = "wal_";
     const std::string SUFFIX = ".log";
@@ -62,8 +62,8 @@ namespace {
             throw std::runtime_error("Segment id extraction failed: error in the file name.");
         }
 
-        auto underscorePos = filename.find("_");
-        auto dotPos = filename.rfind(".");
+        auto underscorePos = filename.find('_');
+        auto dotPos = filename.rfind('.');
 
         std::string serial = filename.substr(
             underscorePos + 1,
@@ -333,6 +333,7 @@ void WAL::replaySegment(
         std::istringstream in(payload, std::ios::binary);
         Record r;
         r.lsn = readValue<uint64_t>(in);
+        r.ownerId = readValue<uint64_t>(in);
         r.type = readValue<uint8_t>(in);
         r.key = readString(in);
 
@@ -501,10 +502,15 @@ void WAL::reset() {
 /// Once the stream is filled, the save is delegated to writeRecord() and the last lsn is incremented by 1.
 /// @param key: reference of the inserted key.
 /// @param value: reference of the inserted value.
-void WAL::appendPut(const std::string &key, const std::string &value) {
+void WAL::appendPut(
+    uint64_t ownerId,
+    const std::string &key,
+    const std::string &value
+    ) {
     const uint64_t lsn = lastLsn_ + 1;
     std::ostringstream oss(std::ios::binary);
     writeValue(oss, lsn);
+    writeValue(oss, ownerId);
     writeValue(oss, PUT_OP);
     writeString(oss, key);
     writeString(oss, value);
@@ -513,10 +519,11 @@ void WAL::appendPut(const std::string &key, const std::string &value) {
 }
 
 /// Logic operation for the "remove", see appendPut() for details.
-void WAL::appendRemove(const std::string &key) {
+void WAL::appendRemove(uint64_t ownerId, const std::string &key) {
     std::ostringstream oss(std::ios::binary);
     const uint64_t lsn = lastLsn_ + 1;
     writeValue(oss, lsn);
+    writeValue(oss, ownerId);
     writeValue(oss, REMOVE_OP);
     writeString(oss, key);
     writeRecord(oss.str());
