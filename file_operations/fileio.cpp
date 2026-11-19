@@ -14,7 +14,17 @@
 #include <unistd.h>
 #endif
 
-///force SO to sync the file in mass storage
+/**
+ * @brief Forces file contents to stable storage.
+ *
+ * Flushes all buffered file data to the underlying storage device.
+ * Uses FlushFileBuffers() on Windows and fsync() on POSIX systems.
+ *
+ * @param filePath Path of the file to synchronize.
+ *
+ * @throws std::runtime_error If the file cannot be opened or the
+ *         synchronization operation fails.
+ */
 void syncFile(const std::filesystem::path &filePath) {
 #ifdef _WIN32
     HANDLE hFile = CreateFileW( //W stands for wide (UTF-16) not write
@@ -44,6 +54,18 @@ void syncFile(const std::filesystem::path &filePath) {
 #endif
 }
 
+/**
+ * @brief Forces directory metadata to stable storage.
+ *
+ * Synchronizes directory updates to ensure that operations such as file creation, deletion and renaming
+ * are durably persisted.
+ * On Windows the function is a no-op.
+ *
+ * @param directoryPath Path of the directory to synchronize.
+ *
+ * @throws std::runtime_error If the directory cannot be opened or
+ *         synchronized.
+ */
 void syncDirectory(const std::filesystem::path &directoryPath) {
 #ifndef _WIN32
 
@@ -60,8 +82,17 @@ void syncDirectory(const std::filesystem::path &directoryPath) {
 }
 
 
-/// Replace the db.tmp file to .db file atomically
-void atomicReplace(const std::filesystem::path &tmpPath, const std::filesystem::path &finalPath) {
+/**
+ * @brief Atomically replaces a file with a temporary version.
+ *
+ * The temporary file is first synchronized to stable storage and is then atomically renamed over the target
+ * file. Directory metadata is also synchronized when required by the underlying platform.
+ *
+ * @param tmpPath Path of the temporary file.
+ * @param finalPath Destination file path.
+ *
+ * @throws std::runtime_error If the replacement operation fails.
+ */void atomicReplace(const std::filesystem::path &tmpPath, const std::filesystem::path &finalPath) {
     syncFile(tmpPath);
 #ifdef _WIN32
     BOOL success = MoveFileExW(

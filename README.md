@@ -15,19 +15,22 @@ Planned features include a client-server architecture with user authentication
 and authorization, as well as support for storing and managing data formats beyond
 plain text key-value pairs, including JSON, XML, and other structured document 
 types.
-## Current features
-- In-memory store with `put`, `get`, `remove`
-- Binary snapshot file with a checkpoint LSN
-- Binary WAL with per-record CRC-32 and replay on startup
-- Durable WAL appends: each record is fsynced before `put`/`remove` returns
-- Atomic snapshots: written to `dbfile.db.tmp`, fsynced, then atomically
-  renamed over `dbfile.db` (the old snapshot stays valid until the swap)
-- Automatic checkpoint: when the WAL reaches a configurable size (default 4 MB), 
-  a snapshot is written atomically and the WAL is then truncated to its header.
+
+## Current Features
+
+- Multi-user key-value database with user creation, authentication and account deletion
+- In-memory store with put, get and remove operations scoped by user ownership
+- Dedicated persistent user database with durable user metadata storage
+- Storage Engine abstraction that orchestrates user management, key-value operations, WAL replay, checkpointing and crash recovery
+- Binary snapshot files for both key-value data and user data
+- Binary WAL with per-record CRC-32 validation and automatic replay on startup
+- Durable WAL appends: each record is fsynced before put, remove, createUser or deleteUser returns
+- Atomic snapshots: snapshots are written to temporary files, fsynced and atomically replaced
+- Automatic checkpointing: when the WAL reaches a configurable size threshold, all persistent state is snapshotted and the WAL is reset
 - WAL segmentation with automatic segment rotation
-- Persistent WAL writer: the active WAL segment remains open between appends 
-  and is fsynced after each record
-- Concurrency (thread-safe access) with shared and unique lock
+- Persistent WAL writer: the active WAL segment remains open between appends and is fsynced after each record
+- Crash recovery through snapshot restoration and WAL replay
+- Thread-safe access using shared and exclusive locking primitives
 
 ## Roadmap
 - Bit-flip corruption test

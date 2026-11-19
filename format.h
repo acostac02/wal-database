@@ -11,19 +11,49 @@
 #include <ostream>
 #include <string>
 
-/// Binary serialization helpers shared by the snapshot (Database) and the
-/// WAL. Write and read functions must always be called in the same order
-/// and with the same types, since the file format has no field labels.
+/**
+ * @brief Binary serialization utilities.
+ *
+ * Provides low-level functions used to serialize and deserialize primitive values and strings for
+ * database snapshots and WAL records.
+ *
+ * Values must always be read in the same order and with the same types  used during serialization,
+ * since the binary format does not store field names or type information.
+ */
 namespace format {
-    ///Write a numeric value to the specified stream as raw bytes (sizeOf(T) bytes, native endianness).
-    ///Only arithmetic values are accepted, for strings use writeString().
+
+    /**
+     * @brief Writes an arithmetic value as raw binary bytes.
+     *
+     * The value is copied directly to the output stream using its in-memory  representation.
+     * The serialized size is sizeof(T) bytes and uses the platform native endianness.
+     *
+     * This function is intended for primitive arithmetic types only. Strings must be serialized using writeString().
+     *
+     * @tparam T Arithmetic type to serialize.
+     * @param out Destination stream.
+     * @param value Value to write.
+     */
     template<typename T>
     void writeValue(std::ostream &out, const T &value) {
         static_assert(std::is_arithmetic_v<T>);
         out.write(reinterpret_cast<const char *>(&value), sizeof(T));
     }
 
-    ///Reads a numeric value of type T from the specified stream (sizeOf(T) bytes, native endianness).
+    /**
+     * @brief Reads an arithmetic value from a binary stream.
+     *
+     * Reads sizeof(T) bytes from the stream and reconstructs a value of type T using the platform
+     * native representation.
+     *
+     * The type and read order must exactly match the corresponding writeValue() call used during serialization.
+     *
+     * @tparam T Arithmetic type to read.
+     * @param in Source stream.
+     * @return Deserialized value.
+     *
+     * @throws std::runtime_error If the stream does not contain enough data.
+     */
     template<typename T>
     T readValue(std::istream &in) {
         static_assert(std::is_arithmetic_v<T>);
@@ -33,8 +63,20 @@ namespace format {
         return v;
     }
 
-    ///Writes a string as length = uint_32 chars without a terminator.
-    /// @throws std::runtime_error if the string is longer than UIN32_MAX.
+    /**
+     * @brief Serializes a string using a length-prefixed format.
+     *
+     * The string length is written first as a uint32_t value, followed by the string characters without
+     * a null terminator.
+     *
+     * Format:
+     * [uint32_t length][raw character bytes]
+     *
+     * @param out Destination stream.
+     * @param s String to serialize.
+     *
+     * @throws std::runtime_error If the string length exceeds UINT32_MAX.
+     */
     inline void writeString(std::ostream &out, const std::string &s) {
         if (s.size() > UINT32_MAX)
             throw std::runtime_error("String too long.");
@@ -42,7 +84,17 @@ namespace format {
         out.write(s.data(), static_cast<std::streamsize>(s.size()));
     }
 
-    ///Reads a string written by writeString().
+    /**
+     * @brief Reads a string serialized by writeString().
+     *
+     * The function first reads the string length as a uint32_t value and then reads the corresponding
+     * number of bytes from the stream.
+     *
+     * @param in Source stream.
+     * @return Deserialized string.
+     *
+     * @throws std::runtime_error If the stream is truncated or corrupted.
+     */
     inline std::string readString(std::istream &in) {
         auto len = readValue<uint32_t>(in);
         std::string s(len, '\0');
@@ -51,8 +103,18 @@ namespace format {
         return s;
     }
 
-    ///Checksum function.
-    ///Initialize bits at 1, for each byte in the payload apply xor and do a polynomial division.
+    /**
+     * @brief Computes the CRC32 checksum of a byte sequence.
+     *
+     * The checksum is used by WAL records to detect corruption caused by incomplete writes, torn writes
+     * or storage failures.
+     *
+     * Each input byte is processed through the CRC32 polynomial division algorithm and the resulting
+     * checksum is returned.
+     *
+     * @param data Input data.
+     * @return CRC32 checksum value.
+     */
     inline uint32_t crc32(const std::string &data) {
         uint32_t crc = 0xFFFFFFFFu;
         for (unsigned char c: data) {

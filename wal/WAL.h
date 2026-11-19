@@ -8,28 +8,34 @@
 #include <functional>
 #include <optional>
 #include <fstream>
+#include "../user_db/UserDatabase.h"
 
 class Database;
+
+enum class RecordType : uint8_t {
+    PutKV      = 0x01,
+    RemoveKV   = 0x02,
+    CreateUser = 0x03,
+    DeleteUser = 0x04
+};
 
 struct Record {
     uint64_t lsn;
     uint64_t ownerId;
-    uint8_t type;
+    RecordType type;
     std::string key;
     std::string value;
 };
 
 class WAL {
 public:
+
     explicit WAL(
         std::filesystem::path path,
         uint64_t maxSegmentSize
     );
 
     ~WAL();
-
-    static constexpr uint8_t PUT_OP = 0x01;
-    static constexpr uint8_t REMOVE_OP = 0x02;
 
     uint64_t getLastLsn() const;
 
@@ -47,6 +53,13 @@ public:
         uint64_t ownerId,
         const std::string &key
     );
+
+    void appendCreateUser(
+        uint64_t ownerId,
+        const std::string &userName,
+        const std::string &passwordHash);
+
+    void appendDeleteUser(uint64_t userId);
 
     void replay(
         uint64_t lastLsn,

@@ -39,27 +39,18 @@ struct KeyHash {
 
 class Database {
 private:
-    std::filesystem::path dbPath;
-    std::unordered_map<Key, std::string, KeyHash> data;
+    std::filesystem::path dbPath_;
+    std::unordered_map<Key, std::string, KeyHash> data_;
 
-    WAL wal;
+    uint64_t loadedCheckpointLsn_ = 0;
+
     mutable std::shared_mutex dbMutex_;
-
-    uint64_t checkpointLsn = 0;
-    const uint64_t checkpointThreshold = 0;
-
-    void checkForCheckpoint();
-
-    void checkpoint();
 
 public:
     static constexpr uint64_t DEFAULT_SEGMENT_SIZE = 16 * 1024 * 1024;
     static constexpr uint64_t DEFAULT_THRESHOLD = 64 * 1024 * 1024;
 
-    explicit Database(
-        std::uint64_t chkpThreshold = DEFAULT_THRESHOLD,
-        uint64_t walSegmentSize = DEFAULT_SEGMENT_SIZE
-    );
+    Database();
 
     void put(
         uint64_t ownerId,
@@ -76,7 +67,11 @@ public:
 
     void remove(uint64_t ownerId, const std::string &key);
 
-    void saveToDisk();
+    void deleteAllForUser(uint64_t userId);
+
+    uint64_t checkpointLsn() const;
+
+    void saveToDisk(uint64_t checkpointLsn);
 
     void loadFromDisk();
 };

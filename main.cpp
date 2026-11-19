@@ -1,5 +1,7 @@
+#include <filesystem>
+
 #include "test/test.h"
 
 int main() {
-testOwnerIsolation();
+    secondRun();
 }

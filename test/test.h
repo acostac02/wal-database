@@ -6,6 +6,6 @@
 #define KWDB_TEST_H
 
 #pragma once
-void testOwnerIsolation();
-
+void firstRun();
+void secondRun();
 #endif //KWDB_TEST_H
