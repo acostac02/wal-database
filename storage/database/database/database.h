@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <shared_mutex>
 
-#include "../wal/WAL.h"
+#include "../../wal/WAL.h"
 
 struct Header {
     uint32_t version = 2;
@@ -65,7 +65,7 @@ public:
 
     bool has(uint64_t ownerId, const std::string &key) const;
 
-    void remove(uint64_t ownerId, const std::string &key);
+    bool remove(uint64_t ownerId, const std::string &key);
 
     void deleteAllForUser(uint64_t userId);
 

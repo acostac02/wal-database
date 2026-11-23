@@ -8,8 +8,8 @@
 #include <iostream>
 #include <mutex>
 
-#include "../format.h"
-#include "../file_operations/fileio.h"
+#include "../../../common/format.h"
+#include "../../../common/file_operations/fileio.h"
 
 #include <utility>
 #include <windows.h>

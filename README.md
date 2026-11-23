@@ -31,6 +31,7 @@ types.
 - Persistent WAL writer: the active WAL segment remains open between appends and is fsynced after each record
 - Crash recovery through snapshot restoration and WAL replay
 - Thread-safe access using shared and exclusive locking primitives
+- TCP server to handle the client requests (single threaded for now)
 
 ## Roadmap
 - Bit-flip corruption test
@@ -69,3 +70,18 @@ payload (len bytes, covered by the CRC-32):
 lsn u64 | owner_id u64 | op u8 | key (string) | value (string, PUT only)
 
 op: 0x01 = PUT, 0x02 = REMOVE (no value)
+
+## Communication protocol
+
+### REQUEST
+Binary protocol for a request sent by a client:
+1 byte: command (put, remove, login...)
+4 byte: payload size
+N byte: payload
+
+### RESPONSE
+Binary protocol for a response sent by the server:
+1 byte: success
+4 byte: payload size
+N byte: payload
+

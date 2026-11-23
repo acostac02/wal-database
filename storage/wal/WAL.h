@@ -6,9 +6,9 @@
 #define KWDB_WAL_H
 #include <filesystem>
 #include <functional>
-#include <optional>
 #include <fstream>
-#include "../user_db/UserDatabase.h"
+#include <chrono>
+#include <optional>
 
 class Database;
 

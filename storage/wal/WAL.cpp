@@ -3,17 +3,18 @@
 //
 
 #include "wal.h"
-#include "../format.h"
-#include "../file_operations/fileio.h"
 
-#include <chrono>
+#include "../database/database/database.h"
+#include "../../common/format.h"
+#include "../../common/file_operations/fileio.h"
+
 #include <filesystem>
-#include "fstream"
+#include <functional>
+#include <fstream>
+#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <optional>
-
-using namespace format;
 
 namespace {
     constexpr uint32_t MAX_RECORD = 64 * 1024 * 1024; //64MB
@@ -35,8 +36,8 @@ namespace {
      */
     void writeHeader(std::ofstream &out, uint64_t firstLsn) {
         out.write(MAGIC, sizeof(MAGIC));
-        writeValue(out, WAL_VERSION);
-        writeValue(out, firstLsn);
+        format::writeValue(out, WAL_VERSION);
+        format::writeValue(out, firstLsn);
     }
 
     /**
@@ -55,12 +56,12 @@ namespace {
             throw std::runtime_error("Incorrect magic in wal.");
         }
 
-        const auto version = readValue<uint32_t>(walFile);
+        const auto version = format::readValue<uint32_t>(walFile);
         if (version != WAL_VERSION) {
             throw std::runtime_error("wal file version not supported: " + std::to_string(version));
         }
 
-        const auto firstLsn = readValue<uint64_t>(walFile);
+        const auto firstLsn = format::readValue<uint64_t>(walFile);
         return firstLsn;
     }
 
@@ -351,8 +352,8 @@ void WAL::writeRecord(const std::string &payload) {
     }
 
     std::ostringstream rec(std::ios::binary);
-    writeValue(rec, static_cast<uint32_t>(payload.size()));
-    writeValue(rec, crc32(payload));
+    format::writeValue(rec, static_cast<uint32_t>(payload.size()));
+    format::writeValue(rec, format::crc32(payload));
     rec.write(payload.data(), static_cast<std::streamsize>(payload.size()));
 
     const std::string bytes = rec.str();
@@ -442,8 +443,8 @@ void WAL::replaySegment(
     while (walFile.peek() != std::ifstream::traits_type::eof()) {
         uint32_t len, crc;
         try {
-            len = readValue<uint32_t>(walFile);
-            crc = readValue<uint32_t>(walFile);
+            len = format::readValue<uint32_t>(walFile);
+            crc = format::readValue<uint32_t>(walFile);
         } catch (const std::runtime_error &) {
             break;
         }
@@ -454,28 +455,28 @@ void WAL::replaySegment(
         walFile.read(payload.data(), static_cast<std::streamsize>(len));
         if (!walFile) break;
 
-        if (crc32(payload) != crc) break;
+        if (format::crc32(payload) != crc) break;
         validOffset = currentOffset(walFile);
 
         std::istringstream in(payload, std::ios::binary);
         Record r;
-        r.lsn = readValue<uint64_t>(in);
-        r.ownerId = readValue<uint64_t>(in);
-        r.type = static_cast<RecordType>(readValue<uint8_t>(in));
+        r.lsn = format::readValue<uint64_t>(in);
+        r.ownerId = format::readValue<uint64_t>(in);
+        r.type = static_cast<RecordType>(format::readValue<uint8_t>(in));
 
         switch (r.type) {
             case RecordType::PutKV:
-                r.key = readString(in);
-                r.value = readString(in);
+                r.key = format::readString(in);
+                r.value = format::readString(in);
                 break;
 
             case RecordType::RemoveKV:
-                r.key = readString(in);
+                r.key = format::readString(in);
                 break;
 
             case RecordType::CreateUser:
-                r.key = readString(in); // username
-                r.value = readString(in); // password hash
+                r.key = format::readString(in); // username
+                r.value = format::readString(in); // password hash
                 break;
 
             case RecordType::DeleteUser:
@@ -632,11 +633,11 @@ void WAL::appendPut(
 ) {
     const uint64_t lsn = lastLsn_ + 1;
     std::ostringstream oss(std::ios::binary);
-    writeValue(oss, lsn);
-    writeValue(oss, ownerId);
-    writeValue(oss, static_cast<uint8_t>(RecordType::PutKV));
-    writeString(oss, key);
-    writeString(oss, value);
+    format::writeValue(oss, lsn);
+    format::writeValue(oss, ownerId);
+    format::writeValue(oss, static_cast<uint8_t>(RecordType::PutKV));
+    format::writeString(oss, key);
+    format::writeString(oss, value);
     writeRecord(oss.str());
     lastLsn_ = lsn;
 }
@@ -654,10 +655,10 @@ void WAL::appendPut(
 void WAL::appendRemove(uint64_t ownerId, const std::string &key) {
     std::ostringstream oss(std::ios::binary);
     const uint64_t lsn = lastLsn_ + 1;
-    writeValue(oss, lsn);
-    writeValue(oss, ownerId);
-    writeValue(oss, static_cast<uint8_t>(RecordType::RemoveKV));
-    writeString(oss, key);
+    format::writeValue(oss, lsn);
+    format::writeValue(oss, ownerId);
+    format::writeValue(oss, static_cast<uint8_t>(RecordType::RemoveKV));
+    format::writeString(oss, key);
     writeRecord(oss.str());
     lastLsn_ = lsn;
 }
@@ -676,11 +677,11 @@ void WAL::appendRemove(uint64_t ownerId, const std::string &key) {
 void WAL::appendCreateUser(const uint64_t ownerId, const std::string &userName, const std::string &passwordHash) {
     std::ostringstream oss(std::ios::binary);
     const uint64_t lsn = lastLsn_ + 1;
-    writeValue(oss, lsn);
-    writeValue(oss, ownerId);
-    writeValue(oss, static_cast<uint8_t>(RecordType::CreateUser));
-    writeString(oss, userName);
-    writeString(oss, passwordHash);
+    format::writeValue(oss, lsn);
+    format::writeValue(oss, ownerId);
+    format::writeValue(oss, static_cast<uint8_t>(RecordType::CreateUser));
+    format::writeString(oss, userName);
+    format::writeString(oss, passwordHash);
     writeRecord(oss.str());
     lastLsn_ = lsn;
 }
@@ -699,9 +700,9 @@ void WAL::appendDeleteUser(uint64_t userId) {
 
     const uint64_t lsn = lastLsn_ + 1;
 
-    writeValue(oss, lsn);
-    writeValue(oss, userId);
-    writeValue(oss, static_cast<uint8_t>(RecordType::DeleteUser));
+    format::writeValue(oss, lsn);
+    format::writeValue(oss, userId);
+    format::writeValue(oss, static_cast<uint8_t>(RecordType::DeleteUser));
 
     writeRecord(oss.str());
     lastLsn_ = lsn;

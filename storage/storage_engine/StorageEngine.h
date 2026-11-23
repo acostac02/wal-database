@@ -5,11 +5,10 @@
 #ifndef KWDB_STORAGEENGINE_H
 #define KWDB_STORAGEENGINE_H
 
-#include "../database/database.h"
+#include "../database/database/database.h"
 #include "../wal/WAL.h"
-#include "../user_db/UserDatabase.h"
+#include "../database/user_db/UserDatabase.h"
 
-#include <cstdint>
 #include <shared_mutex>
 
 
@@ -40,7 +39,7 @@ public:
         const std::string &value
     );
 
-    void remove(
+    bool remove(
         uint64_t ownerId,
         const std::string &key
     );

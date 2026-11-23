@@ -4,9 +4,9 @@
 
 #include "../database/database.h"
 
-#include "../wal/WAL.h"
-#include "../format.h"
-#include "../file_operations/fileio.h"
+#include "../../wal/WAL.h"
+#include "../../../common/format.h"
+#include "../../../common/file_operations/fileio.h"
 
 #include <cstring>
 #include "iostream"
@@ -159,12 +159,14 @@ bool Database::has(uint64_t ownerId, const std::string &key) const {
  * @param ownerId the identifier of the user that want to execute the operation.
  * @param key reference of the key to remove.
  */
-void Database::remove(const uint64_t ownerId, const std::string &key) {
+bool Database::remove(const uint64_t ownerId, const std::string &key) {
     std::unique_lock<std::shared_mutex> lock(dbMutex_);
 
     if (data_.contains(Key{ownerId, key})) {
         data_.erase(Key{ownerId, key});
+        return true;
     }
+    return false;
 }
 
 /**

@@ -126,10 +126,11 @@ void StorageEngine::put(const uint64_t ownerId, const std::string &key, const st
  * @param ownerId Identifier of the user performing the operation.
  * @param key Key to remove.
  */
-void StorageEngine::remove(const uint64_t ownerId, const std::string &key) {
+bool StorageEngine::remove(const uint64_t ownerId, const std::string &key) {
     wal_.appendRemove(ownerId, key);
-    database_.remove(ownerId, key);
+    const bool success = database_.remove(ownerId, key);
     checkForCheckpoint();
+    return success;
 }
 
 /**
